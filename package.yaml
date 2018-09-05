@@ -1,0 +1,60 @@
+name:                audit
+version:             0.1.0.0
+github:              "githubuser/audit"
+license:             BSD3
+author:              "Author name here"
+maintainer:          "example@example.com"
+copyright:           "2018 Author name here"
+
+extra-source-files:
+- README.md
+- ChangeLog.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/githubuser/audit#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+- conduit
+- containers
+- mtl
+- parsec
+- pretty-simple
+- process
+- text
+
+library:
+  source-dirs: src
+  exposed-modules:
+  - Generate
+  - Parser
+  - Sorting
+  - Types
+
+executables:
+  audit-exe:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - audit
+
+tests:
+  audit-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - audit
