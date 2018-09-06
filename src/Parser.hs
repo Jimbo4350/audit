@@ -8,10 +8,10 @@ module Parser
        , styleRemoval
        ) where
 
-import           Conduit (decodeUtf8C, encodeUtf8C, mapC, runConduitRes,
-                     sourceFile, stdoutC, (.|))
-import           Data.List (concat, intercalate)
-import qualified Data.Text as T
+import           Conduit     (decodeUtf8C, encodeUtf8C, mapC, runConduitRes,
+                              sourceFile, stdoutC, (.|))
+import           Data.List   (concat, intercalate)
+import qualified Data.Text   as T
 import           Text.Parsec
 
 mainPackages :: Parsec String () [(String,String)]
@@ -22,6 +22,10 @@ mainPackages = do
     final <- directDependancies `sepEndBy` newline
     return final
 
+
+------------------------------Helper Parsers-----------------------------------
+
+-- | Returns (package, dependency)
 directDependancies :: Parsec String () (String,String)
 directDependancies = do
     package <- stringParse
@@ -30,13 +34,12 @@ directDependancies = do
     _ <- char ';'
     return $ (package, dependency)
 
-
-------------------------------Helper Parsers-----------------------------------
-
+-- | Removes "strict digraph deps {"
 digraphRemoval :: Parsec String () [String]
 digraphRemoval =
     concat <$> manyTill (many alphaNum `sepBy` space) (char '{') <* many space
 
+-- | Parses the package on the left hand side of " ->"
 mainPackage :: Parsec String () [String]
 mainPackage =
     between
@@ -44,6 +47,7 @@ mainPackage =
         (char '"')
         (many alphaNum `sepBy` char ('-')) <* many space
 
+-- | Removes "[style=dashed]; "
 styleRemoval :: Parsec String () ()
 styleRemoval = do
     _ <- between
@@ -54,6 +58,7 @@ styleRemoval = do
     _ <- many space
     pure ()
 
+-- | Removes "{rank=max; "String"; };"
 rankRemoval :: Parsec String () ()
 rankRemoval = do
     _ <- between (char '{')
@@ -67,6 +72,7 @@ rankRemoval = do
     _ <- char ';'
     pure ()
 
+-- | Removes "{rank=max; "String" [shape=box]; };"
 shapeRemoval :: Parsec String () ()
 shapeRemoval = do
     _ <- between (char '{')
@@ -80,15 +86,6 @@ shapeRemoval = do
     _ <- char ';'
     pure ()
 
-stringParse :: Parsec String () String
-stringParse = do
-    between
-             (char '"')
-             (char '"')
-             (try (concat <$> many alphaNum `sepBy` char '-')
-                 <|> (many alphaNum)
-             )
-
 shapeRemoval' :: Parsec String () String
 shapeRemoval' = do
     stringParse
@@ -97,3 +94,13 @@ shapeRemoval' = do
         (char '[')
         (char ']')
         (many alphaNum *> char '=' *> many alphaNum)
+
+-- | Parses a string
+stringParse :: Parsec String () String
+stringParse = do
+    between
+             (char '"')
+             (char '"')
+             (try (concat <$> many alphaNum `sepBy` char '-')
+                 <|> (many alphaNum)
+             )

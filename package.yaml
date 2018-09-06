@@ -21,12 +21,15 @@ description:         Please see the README on GitHub at <https://github.com/gith
 
 dependencies:
 - base >= 4.7 && < 5
+- beam-core
+- beam-sqlite
 - conduit
 - containers
 - mtl
 - parsec
 - pretty-simple
 - process
+- sqlite-simple
 - text
 
 library:
@@ -35,6 +38,7 @@ library:
   - Generate
   - Parser
   - Sorting
+  - Sqlite
   - Types
 
 executables:
