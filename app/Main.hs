@@ -1,8 +1,16 @@
 module Main where
 
-import           Generate (createDeps, streamDeps)
+import           Generate (createDB, createDeps, streamDeps)
+import           Types (examplePackage)
+import           Sqlite (insertAuditor, queryAuditor)
 
 main :: IO ()
-main = createDeps >> streamDeps
+main = do
+    createDB
+    createDeps
+    streamDeps
+    putStrLn "Insert example package into auditor.db and query db"
+    insertAuditor examplePackage
+    queryAuditor
 
 

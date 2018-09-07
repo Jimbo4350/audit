@@ -6,12 +6,16 @@
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeSynonymInstances  #-}
 
-module Sqlite where
+module Sqlite
+       ( insertAuditor
+       , queryAuditor
+       ) where
 
-import           Data.Text              (Text)
+import           Data.Text              (Text, pack)
 import           Database.Beam
 import           Database.Beam.Sqlite
 import           Database.SQLite.Simple
+import           Types (Package (..))
 
 -- | Auditor Table
 
@@ -49,3 +53,21 @@ instance Database be AuditorDb
 auditorDb :: DatabaseSettings be AuditorDb
 auditorDb = defaultDbSettings
 
+-- | SQL queries etc
+
+-- | Takes a `Package` and inserts it into the Auditor table.
+insertAuditor :: Package -> IO ()
+insertAuditor (Package pName pVersion dateFS dDep sUsed aStatus) = do
+    conn <- open "auditor.db"
+    runBeamSqliteDebug putStrLn {- for debug output -} conn $ runInsert $
+        insert (_auditor auditorDb) $
+        insertValues [ Auditor pName pVersion (pack $ show dateFS) (pack $ show dDep) (pack $ show sUsed) (pack $ show aStatus)]
+
+-- | Queries all enteries in the Auditor table.
+queryAuditor :: IO ()
+queryAuditor = do
+    let allEntries = all_ (_auditor auditorDb)
+    conn <- open "auditor.db"
+    runBeamSqliteDebug putStrLn conn $ do
+      entries <- runSelectReturningList $ select allEntries
+      mapM_ (liftIO . putStrLn . show) entries

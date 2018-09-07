@@ -23,14 +23,15 @@ dependencies:
 - base >= 4.7 && < 5
 - beam-core
 - beam-sqlite
-- conduit
 - containers
+- directory
 - mtl
 - parsec
 - pretty-simple
 - process
 - sqlite-simple
 - text
+- time
 
 library:
   source-dirs: src
@@ -40,6 +41,7 @@ library:
   - Sorting
   - Sqlite
   - Types
+  ghc-options: -Wall
 
 executables:
   audit-exe:

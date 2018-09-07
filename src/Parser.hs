@@ -6,22 +6,22 @@ module Parser
        , shapeRemoval
        , stringParse
        , styleRemoval
+       , versions
        ) where
 
-import           Conduit     (decodeUtf8C, encodeUtf8C, mapC, runConduitRes,
-                              sourceFile, stdoutC, (.|))
 import           Data.List   (concat, intercalate)
-import qualified Data.Text   as T
 import           Text.Parsec
 
 mainPackages :: Parsec String () [(String,String)]
 mainPackages = do
     _ <- digraphRemoval
     _ <- many (mainPackage <* styleRemoval)
-    _ <-  ((try shapeRemoval) <|> rankRemoval) `sepEndBy` newline
-    final <- directDependancies `sepEndBy` newline
-    return final
+    _ <- (try shapeRemoval <|> rankRemoval) `sepEndBy` newline
+    directDependancies `sepEndBy` newline
 
+
+versions :: Parsec String () [(String,String)]
+versions = dependencyVersion `sepEndBy` newline
 
 ------------------------------Helper Parsers-----------------------------------
 
@@ -88,8 +88,8 @@ shapeRemoval = do
 
 shapeRemoval' :: Parsec String () String
 shapeRemoval' = do
-    stringParse
-    space
+    _ <- stringParse
+    _ <- space
     between
         (char '[')
         (char ']')
@@ -97,10 +97,16 @@ shapeRemoval' = do
 
 -- | Parses a string
 stringParse :: Parsec String () String
-stringParse = do
+stringParse =
     between
-             (char '"')
-             (char '"')
-             (try (concat <$> many alphaNum `sepBy` char '-')
-                 <|> (many alphaNum)
-             )
+        (char '"')
+        (char '"')
+        (try (intercalate "-" <$> many alphaNum `sepBy` char '-')
+            <|> (many alphaNum))
+
+dependencyVersion :: Parsec String () (String,String)
+dependencyVersion = do
+    pName <- concat <$> many alphaNum `sepBy` char '-'
+    _ <- space
+    version <- intercalate "." <$> many digit `sepBy` char '.'
+    return (pName,version)
