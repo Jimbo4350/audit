@@ -1,21 +1,20 @@
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE StandaloneDeriving    #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeSynonymInstances  #-}
 
 module Sqlite
-       ( insertAuditor
+       ( insertPackage
        , queryAuditor
        ) where
 
-import           Data.Text              (Text, pack)
+import           Data.Text                       (Text, pack)
 import           Database.Beam
 import           Database.Beam.Sqlite
-import           Database.SQLite.Simple
-import           Types (Package (..))
+import           Database.SQLite.Simple          (close, open)
+import           Types                           (Package (..))
 
 -- | Auditor Table
 
@@ -45,8 +44,8 @@ instance Beamable (PrimaryKey AuditorT)
 -- | Database
 
 data AuditorDb f = AuditorDb
-                      { _auditor :: f (TableEntity AuditorT) }
-                        deriving Generic
+    { _auditor :: f (TableEntity AuditorT)
+    } deriving Generic
 
 instance Database be AuditorDb
 
@@ -56,18 +55,27 @@ auditorDb = defaultDbSettings
 -- | SQL queries etc
 
 -- | Takes a `Package` and inserts it into the Auditor table.
-insertAuditor :: Package -> IO ()
-insertAuditor (Package pName pVersion dateFS dDep sUsed aStatus) = do
+insertPackage :: Package -> IO ()
+insertPackage (Package pName pVersion dateFS dDep sUsed aStatus) = do
     conn <- open "auditor.db"
     runBeamSqliteDebug putStrLn {- for debug output -} conn $ runInsert $
         insert (_auditor auditorDb) $
-        insertValues [ Auditor pName pVersion (pack $ show dateFS) (pack $ show dDep) (pack $ show sUsed) (pack $ show aStatus)]
+        insertValues [ Auditor
+                           pName
+                           pVersion
+                           (pack $ show dateFS)
+                           (pack $ show dDep)
+                           (pack $ show sUsed)
+                           (pack $ show aStatus)
+                     ]
+    close conn
 
 -- | Queries all enteries in the Auditor table.
 queryAuditor :: IO ()
-queryAuditor = do
-    let allEntries = all_ (_auditor auditorDb)
+queryAuditor  = do
     conn <- open "auditor.db"
+    let allEntries = all_ (_auditor auditorDb)
     runBeamSqliteDebug putStrLn conn $ do
       entries <- runSelectReturningList $ select allEntries
       mapM_ (liftIO . putStrLn . show) entries
+    close conn

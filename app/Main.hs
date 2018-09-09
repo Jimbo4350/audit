@@ -1,8 +1,7 @@
 module Main where
 
 import           Generate (createDB, createDeps, streamDeps)
-import           Types (examplePackage)
-import           Sqlite (insertAuditor, queryAuditor)
+import           Sqlite (queryAuditor)
 
 main :: IO ()
 main = do
@@ -10,7 +9,6 @@ main = do
     createDeps
     streamDeps
     putStrLn "Insert example package into auditor.db and query db"
-    insertAuditor examplePackage
     queryAuditor
 
 

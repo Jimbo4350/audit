@@ -1,7 +1,8 @@
 module Parser
        ( digraphRemoval
        , mainPackage
-       , mainPackages
+       , allDependencies
+       , packageName'
        , rankRemoval
        , shapeRemoval
        , stringParse
@@ -12,8 +13,13 @@ module Parser
 import           Data.List   (concat, intercalate)
 import           Text.Parsec
 
-mainPackages :: Parsec String () [(String,String)]
-mainPackages = do
+packageName' :: Parsec String () String
+packageName' = do
+    _ <- digraphRemoval
+    concat <$> mainPackage <* styleRemoval
+
+allDependencies :: Parsec String () [(String,String)]
+allDependencies = do
     _ <- digraphRemoval
     _ <- many (mainPackage <* styleRemoval)
     _ <- (try shapeRemoval <|> rankRemoval) `sepEndBy` newline
@@ -106,7 +112,7 @@ stringParse =
 
 dependencyVersion :: Parsec String () (String,String)
 dependencyVersion = do
-    pName <- concat <$> many alphaNum `sepBy` char '-'
+    pName <- (intercalate "-") <$> many alphaNum `sepBy` char '-'
     _ <- space
     version <- intercalate "." <$> many digit `sepBy` char '.'
     return (pName,version)
