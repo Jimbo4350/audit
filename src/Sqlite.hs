@@ -10,11 +10,11 @@ module Sqlite
        , queryAuditor
        ) where
 
-import           Data.Text                       (Text, pack)
+import           Data.Text              (Text, pack)
 import           Database.Beam
 import           Database.Beam.Sqlite
-import           Database.SQLite.Simple          (close, open)
-import           Types                           (Package (..))
+import           Database.SQLite.Simple (close, open)
+import           Types                  (Package (..))
 
 -- | Auditor Table
 

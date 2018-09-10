@@ -6,11 +6,12 @@ module Generate
 
 import           Control.Monad    (join)
 import           Data.Either      (fromRight)
+import           Data.List        (nub, (\\))
 import           Data.Maybe       (fromMaybe)
 import           Data.Text        (pack)
 import           Data.Time.Clock  (getCurrentTime)
 import           Parser           (allDependencies, packageName', versions)
-import           Sorting          (sortingFunction)
+import           Sorting          (sortParseResults, tuplesToList)
 import           Sqlite           (insertPackage)
 import           System.Directory (getDirectoryContents)
 import           System.Process   (callCommand)
@@ -22,8 +23,9 @@ createDeps = do
     callCommand "stack dot --external > gendeps.dot"
     callCommand "stack ls dependencies > depsVers.txt"
 
-insertDirectDependencies :: String -> [(String,[String])] -> [(String,String)] -> IO ()
-insertDirectDependencies mainP allDeps pVersions  = do
+-- | Writes direct dependencies to the db.
+insDirDeps :: String -> [(String,[String])] -> [(String,String)] -> IO ()
+insDirDeps mainP allDeps pVersions  = do
     let directDeps = filter (\x -> fst x == mainP) allDeps
     cTime <- getCurrentTime
     mapM_ (\x -> insertPackage
@@ -41,7 +43,23 @@ insertDirectDependencies mainP allDeps pVersions  = do
     --    as necessary. Default to `True` for now.
     --    Also default `[AnalysisStatus]` to [] for now.
 
+-- | Writes indirect dependencies to the db.
+insIndirDeps :: String -> [(String,[String])] -> [(String,String)] -> IO ()
+insIndirDeps mainP allDeps pVersions = do
+    let directDeps = tuplesToList $ filter (\x -> fst x == mainP) allDeps
+    let indirectDeps = (nub $ tuplesToList allDeps) \\ directDeps
+    cTime <- getCurrentTime
+    mapM_ (\x -> insertPackage
+                     (Package
+                         (pack x)
+                         (pack $ fromMaybe "No version Found" (lookup x pVersions))
+                         cTime
+                         False
+                         True
+                         [])) indirectDeps
+
 -- | First prints [(package, dependencies)] then [(package, version)].
+-- Inserts direct and indirect dependencies into sqlite db.
 streamDeps :: IO ()
 streamDeps = do
     pName <- parse packageName' "" <$> readFile "gendeps.dot"
@@ -59,8 +77,9 @@ streamDeps = do
         (Right pResult, Right vResult)     -> do
             print pName
             putStrLn ""
-            insertDirectDependencies (fromRight "Failure" pName) (sortingFunction pResult) vResult -- |TODO: Handle pName properly
-            print $ sortingFunction pResult
+            insDirDeps (fromRight "Failure" pName) (sortParseResults pResult) vResult -- |TODO: Handle pName properly
+            insIndirDeps (fromRight "Failure" pName) (sortParseResults pResult) vResult -- |TODO: Handle pName properly
+            print $ sortParseResults pResult
             putStrLn ""
             print vResult
 

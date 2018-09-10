@@ -1,7 +1,7 @@
 module Main where
 
 import           Generate (createDB, createDeps, streamDeps)
-import           Sqlite (queryAuditor)
+import           Sqlite   (queryAuditor)
 
 main :: IO ()
 main = do
