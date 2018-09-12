@@ -1,14 +1,11 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Types
        ( Package (..)
        , AnalysisStatus (..)
-       , examplePackage
+       , HashStatus (..)
        ) where
 
 import           Data.Text          (Text)
-import           Data.Time.Calendar (fromGregorian)
-import           Data.Time.Clock    (UTCTime (..), secondsToDiffTime)
+import           Data.Time.Clock    (UTCTime (..))
 
 data Package = Package
     { packageName    :: Text
@@ -29,6 +26,10 @@ data AnalysisStatus
     | ASNewDependency
     deriving Show
 
-examplePackage :: Package
-examplePackage =
-    Package "testName" "testVersion" (UTCTime (fromGregorian 10 10 10) (secondsToDiffTime 10)) True True []
+-- | Tells us if the hash of the existing .dot file matches
+-- the hash of a newly generated .dot file or if the hash
+-- exists in the db.
+data HashStatus = HashMatches
+                | HashDoesNotMatch
+                | HashNotFound
+                deriving Show

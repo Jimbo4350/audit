@@ -1,22 +1,23 @@
 module Generate
        ( createDB
        , createDeps
-       , streamDeps
+       , insertDB
        ) where
 
 import           Control.Monad    (join)
 import           Data.Either      (fromRight)
+import           Data.Hashable    (hash)
 import           Data.List        (nub, (\\))
 import           Data.Maybe       (fromMaybe)
 import           Data.Text        (pack)
 import           Data.Time.Clock  (getCurrentTime)
 import           Parser           (allDependencies, packageName', versions)
 import           Sorting          (sortParseResults, tuplesToList)
-import           Sqlite           (insertPackage)
+import           Sqlite           (checkHash, insertHash, insertPackage)
 import           System.Directory (getDirectoryContents)
 import           System.Process   (callCommand)
 import           Text.Parsec      (parse)
-import           Types            (Package (..))
+import           Types            (Package (..), HashStatus (..))
 
 createDeps :: IO ()
 createDeps = do
@@ -47,7 +48,7 @@ insDirDeps mainP allDeps pVersions  = do
 insIndirDeps :: String -> [(String,[String])] -> [(String,String)] -> IO ()
 insIndirDeps mainP allDeps pVersions = do
     let directDeps = tuplesToList $ filter (\x -> fst x == mainP) allDeps
-    let indirectDeps = (nub $ tuplesToList allDeps) \\ directDeps
+    let indirectDeps = nub (tuplesToList allDeps) \\ directDeps
     cTime <- getCurrentTime
     mapM_ (\x -> insertPackage
                      (Package
@@ -58,10 +59,9 @@ insIndirDeps mainP allDeps pVersions = do
                          True
                          [])) indirectDeps
 
--- | First prints [(package, dependencies)] then [(package, version)].
--- Inserts direct and indirect dependencies into sqlite db.
-streamDeps :: IO ()
-streamDeps = do
+-- | Inserts direct and indirect dependencies into the sqlite db.
+insertDB :: IO ()
+insertDB = do
     pName <- parse packageName' "" <$> readFile "gendeps.dot"
     pDeps <- parse allDependencies "" <$> readFile "gendeps.dot"
     pVersions <- parse versions "" <$> readFile "depsVers.txt"
@@ -75,29 +75,40 @@ streamDeps = do
             print pErrorVer
             print pResult
         (Right pResult, Right vResult)     -> do
-            print pName
-            putStrLn ""
-            insDirDeps (fromRight "Failure" pName) (sortParseResults pResult) vResult -- |TODO: Handle pName properly
-            insIndirDeps (fromRight "Failure" pName) (sortParseResults pResult) vResult -- |TODO: Handle pName properly
-            print $ sortParseResults pResult
-            putStrLn ""
-            print vResult
+            insDirDeps
+                (fromRight "Insert direct dependancies failure" pName)
+                (sortParseResults pResult) vResult -- |TODO: Handle pName properly
+            insIndirDeps
+                (fromRight "Insert indirect dependencies failure" pName)
+                (sortParseResults pResult) vResult -- |TODO: Handle pName properly
+            readFile "gendeps.dot" >>= insertHash . hash
 
--- | Checks if "auditor.db" exists in pwd, if not creates it and the table `auditor`
-createDB :: IO ()
+-- | Checks if "auditor.db" exists in pwd, if not creates it with the
+-- tables `auditor` (which holds all the dependency data) and `hash`
+-- which holds the hash of the existing .dot file.
+-- If "auditor.db" is present, it generates a new `.dot` file and checks
+-- the hash of the existing `.dot` file against the new `.dot` file generated.
+createDB :: IO HashStatus
 createDB = do
     filenames <- getDirectoryContents "."
     if "auditor.db" `elem` filenames
-        then print "auditor.db present"
-        else callCommand "sqlite3 auditor.db \
-           \\"CREATE TABLE auditor ( package_name VARCHAR NOT NULL\
-                                  \, package_version VARCHAR NOT NULL\
-                                  \, date_first_seen VARCHAR NOT NULL\
-                                  \, direct_dep VARCHAR NOT NULL\
-                                  \, still_used VARCHAR NOT NULL\
-                                  \, analysis_status VARCHAR NOT NULL\
-                                  \, PRIMARY KEY( package_name ));\""
-
-
+        then do
+             print "auditor.db present"
+             print "Generating new dot file and checking hash"
+             callCommand "stack dot --external > gendepsUpdated.dot"
+             let updatedHash = hash <$> readFile "gendepsUpdated.dot"
+             updatedHash >>= checkHash
+        else do
+             callCommand "sqlite3 auditor.db \
+          \\"CREATE TABLE auditor ( package_name VARCHAR NOT NULL\
+                                 \, package_version VARCHAR NOT NULL\
+                                 \, date_first_seen VARCHAR NOT NULL\
+                                 \, direct_dep VARCHAR NOT NULL\
+                                 \, still_used VARCHAR NOT NULL\
+                                 \, analysis_status VARCHAR NOT NULL\
+                                 \, PRIMARY KEY( package_name )); \
+           \CREATE TABLE hash ( dot_hash INT NOT NULL\
+                                 \, PRIMARY KEY ( dot_hash )); \""
+             return HashNotFound
 
 

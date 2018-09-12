@@ -25,6 +25,7 @@ dependencies:
 - beam-sqlite
 - containers
 - directory
+- hashable
 - mtl
 - parsec
 - pretty-simple
