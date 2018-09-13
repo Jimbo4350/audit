@@ -71,11 +71,37 @@ instance Table HashT where
 
 instance Beamable (PrimaryKey HashT)
 
+-- | Dependency difference table. This table
+-- stores any changes to the dependency tree
+
+data DiffT f = Diff
+    { _diffPackageName    :: Columnar f Text
+    , _diffPackageVersion :: Columnar f Text
+    , _diffDateFirstSeen  :: Columnar f Text
+    , _diffDirectDep      :: Columnar f Text
+    , _diffStillUsed      :: Columnar f Text
+    , _diffAnalysisStatus :: Columnar f Text
+    } deriving Generic
+
+type Diff = DiffT Identity
+type DiffPackageName = PrimaryKey DiffT Identity
+
+deriving instance Eq Diff
+deriving instance Show Diff
+
+instance Beamable DiffT
+
+instance Table DiffT where
+    data PrimaryKey DiffT f = DiffPackageName (Columnar f Text) deriving Generic
+    primaryKey = DiffPackageName . _diffPackageName
+
+instance Beamable (PrimaryKey DiffT)
 -- | Database
 
 data AuditorDb f = AuditorDb
     { _auditor :: f (TableEntity AuditorT)
     , _hash    :: f (TableEntity HashT)
+    , _diff    :: f (TableEntity DiffT)
     } deriving Generic
 
 instance Database be AuditorDb
