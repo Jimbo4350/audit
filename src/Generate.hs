@@ -1,5 +1,6 @@
 module Generate
        ( checkNewPackages
+       , checkNewVersions
        , createDB
        , createDeps
        , insertDB
@@ -82,7 +83,7 @@ insertDB = do
             insIndirDeps
                 (fromRight "Insert indirect dependencies failure" pName) -- |TODO: Handle pName properly
                 (sortParseResults pResult) vResult
-            readFile "gendeps.dot" >>= insertHash . hash
+            (++) <$> readFile "gendeps.dot" <*> readFile "depsVers.txt" >>= insertHash . hash
 
 -- | Checks for new packages added to the cabal file.
 checkNewPackages :: IO [String]
@@ -93,6 +94,16 @@ checkNewPackages = do
     case (newDeps, oldDeps, pName) of
         (Right nDeps, Right oDeps, Right mainP) ->
             return $ map snd (filter (\x -> fst x == mainP) $ nDeps \\ oDeps)
+        _ -> error "ParseFailure"
+
+-- | Checks for new versions added to the cabal file.
+checkNewVersions :: IO [(String, String)]
+checkNewVersions = do
+    pName <- parse packageName' "" <$> readFile "gendeps.dot"
+    oldVersions <- parse versions "" <$> readFile "depsVers.txt"
+    newVersions <- parse versions "" <$> readFile "depsVersUpdated.txt"
+    case (pName, oldVersions, newVersions) of
+        (Right mainP, Right oVersions, Right nVersions) -> return $ nVersions \\ oVersions
         _ -> error "ParseFailure"
 
 -- | Checks if "auditor.db" exists in pwd, if not creates it with the
@@ -108,8 +119,9 @@ createDB = do
              print "auditor.db present"
              print "Generating new dot file and checking hash"
              callCommand "stack dot --external > gendepsUpdated.dot"
-             let updatedHash = hash <$> readFile "gendepsUpdated.dot"
-             updatedHash >>= checkHash
+             callCommand "stack ls dependencies > depsVersUpdated.txt"
+             contents <- (++) <$> readFile "gendepsUpdated.dot" <*> readFile "depsVersUpdated.txt"
+             checkHash $ hash contents
         else do
              callCommand "sqlite3 auditor.db \
                  \\"CREATE TABLE auditor ( package_name VARCHAR NOT NULL\
