@@ -28,7 +28,6 @@ dependencies:
 - hashable
 - mtl
 - parsec
-- pretty-simple
 - process
 - sqlite-simple
 - text

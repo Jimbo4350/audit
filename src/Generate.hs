@@ -1,13 +1,14 @@
 module Generate
-       ( createDB
+       ( checkNewPackages
+       , createDB
        , createDeps
        , insertDB
        ) where
 
-import           Control.Monad    (join)
-import           Data.Either      (fromRight)
+import           Control.Monad    (join, sequence)
+import           Data.Either      (fromRight, isRight)
 import           Data.Hashable    (hash)
-import           Data.List        (nub, (\\))
+import           Data.List        (nub, (\\), all)
 import           Data.Maybe       (fromMaybe)
 import           Data.Text        (pack)
 import           Data.Time.Clock  (getCurrentTime)
@@ -76,12 +77,23 @@ insertDB = do
             print pResult
         (Right pResult, Right vResult)     -> do
             insDirDeps
-                (fromRight "Insert direct dependancies failure" pName)
-                (sortParseResults pResult) vResult -- |TODO: Handle pName properly
+                (fromRight "Insert direct dependancies failure" pName) -- |TODO: Handle pName properly
+                (sortParseResults pResult) vResult
             insIndirDeps
-                (fromRight "Insert indirect dependencies failure" pName)
-                (sortParseResults pResult) vResult -- |TODO: Handle pName properly
+                (fromRight "Insert indirect dependencies failure" pName) -- |TODO: Handle pName properly
+                (sortParseResults pResult) vResult
             readFile "gendeps.dot" >>= insertHash . hash
+
+-- | Checks for new packages added to the cabal file.
+checkNewPackages :: IO [String]
+checkNewPackages = do
+    pName <- parse packageName' "" <$> readFile "gendeps.dot"
+    oldDeps <- parse allDependencies "" <$> readFile "gendeps.dot"
+    newDeps <- parse allDependencies "" <$> readFile "gendepsUpdated.dot"
+    case (newDeps, oldDeps, pName) of
+        (Right nDeps, Right oDeps, Right mainP) ->
+            return $ map snd (filter (\x -> fst x == mainP) $ nDeps \\ oDeps)
+        _ -> error "ParseFailure"
 
 -- | Checks if "auditor.db" exists in pwd, if not creates it with the
 -- tables `auditor` (which holds all the dependency data) and `hash`
@@ -100,15 +112,22 @@ createDB = do
              updatedHash >>= checkHash
         else do
              callCommand "sqlite3 auditor.db \
-          \\"CREATE TABLE auditor ( package_name VARCHAR NOT NULL\
-                                 \, package_version VARCHAR NOT NULL\
-                                 \, date_first_seen VARCHAR NOT NULL\
-                                 \, direct_dep VARCHAR NOT NULL\
-                                 \, still_used VARCHAR NOT NULL\
-                                 \, analysis_status VARCHAR NOT NULL\
-                                 \, PRIMARY KEY( package_name )); \
-           \CREATE TABLE hash ( dot_hash INT NOT NULL\
-                                 \, PRIMARY KEY ( dot_hash )); \""
+                 \\"CREATE TABLE auditor ( package_name VARCHAR NOT NULL\
+                                        \, package_version VARCHAR NOT NULL\
+                                        \, date_first_seen VARCHAR NOT NULL\
+                                        \, direct_dep VARCHAR NOT NULL\
+                                        \, still_used VARCHAR NOT NULL\
+                                        \, analysis_status VARCHAR NOT NULL\
+                                        \, PRIMARY KEY( package_name )); \
+                  \CREATE TABLE hash ( dot_hash INT NOT NULL\
+                                        \, PRIMARY KEY ( dot_hash )); \
+                  \CREATE TABLE newPackages ( package_name VARCHAR NOT NULL\
+                                        \, package_version VARCHAR NOT NULL\
+                                        \, date_first_seen VARCHAR NOT NULL\
+                                        \, direct_dep VARCHAR NOT NULL\
+                                        \, still_used VARCHAR NOT NULL\
+                                        \, analysis_status VARCHAR NOT NULL\
+                                        \, PRIMARY KEY( package_name )); \""
              return HashNotFound
 
 
