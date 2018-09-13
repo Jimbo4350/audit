@@ -6,10 +6,10 @@ module Generate
        , insertDB
        ) where
 
-import           Control.Monad    (join, sequence)
-import           Data.Either      (fromRight, isRight)
+import           Control.Monad    (join)
+import           Data.Either      (fromRight)
 import           Data.Hashable    (hash)
-import           Data.List        (nub, (\\), all)
+import           Data.List        (nub, (\\))
 import           Data.Maybe       (fromMaybe)
 import           Data.Text        (pack)
 import           Data.Time.Clock  (getCurrentTime)
@@ -23,8 +23,8 @@ import           Types            (Package (..), HashStatus (..))
 
 createDeps :: IO ()
 createDeps = do
-    callCommand "stack dot --external > gendeps.dot"
-    callCommand "stack ls dependencies > depsVers.txt"
+    callCommand "stack dot --external > repoinfo/gendeps.dot"
+    callCommand "stack ls dependencies > repoinfo/depsVers.txt"
 
 -- | Writes direct dependencies to the db.
 insDirDeps :: String -> [(String,[String])] -> [(String,String)] -> IO ()
@@ -64,9 +64,9 @@ insIndirDeps mainP allDeps pVersions = do
 -- | Inserts direct and indirect dependencies into the sqlite db.
 insertDB :: IO ()
 insertDB = do
-    pName <- parse packageName' "" <$> readFile "gendeps.dot"
-    pDeps <- parse allDependencies "" <$> readFile "gendeps.dot"
-    pVersions <- parse versions "" <$> readFile "depsVers.txt"
+    pName <- parse packageName' "" <$> readFile "repoinfo/gendeps.dot"
+    pDeps <- parse allDependencies "" <$> readFile "repoinfo/gendeps.dot"
+    pVersions <- parse versions "" <$> readFile "repoinfo/depsVers.txt"
     case (pDeps, pVersions) of
         (Left pErrorDep , Left pErrorVer)  ->
             error ("Dependency parser:" ++ show pErrorDep ++ "Version parser: " ++ show pErrorVer)
@@ -83,28 +83,27 @@ insertDB = do
             insIndirDeps
                 (fromRight "Insert indirect dependencies failure" pName) -- |TODO: Handle pName properly
                 (sortParseResults pResult) vResult
-            (++) <$> readFile "gendeps.dot" <*> readFile "depsVers.txt" >>= insertHash . hash
+            (++) <$> readFile "repoinfo/gendeps.dot" <*> readFile "repoinfo/depsVers.txt" >>= insertHash . hash
 
 -- | Checks for new packages added to the cabal file.
 checkNewPackages :: IO [String]
 checkNewPackages = do
-    pName <- parse packageName' "" <$> readFile "gendeps.dot"
-    oldDeps <- parse allDependencies "" <$> readFile "gendeps.dot"
-    newDeps <- parse allDependencies "" <$> readFile "gendepsUpdated.dot"
+    pName <- parse packageName' "" <$> readFile "repoinfo/gendeps.dot"
+    oldDeps <- parse allDependencies "" <$> readFile "repoinfo/gendeps.dot"
+    newDeps <- parse allDependencies "" <$> readFile "repoinfo/gendepsUpdated.dot"
     case (newDeps, oldDeps, pName) of
         (Right nDeps, Right oDeps, Right mainP) ->
             return $ map snd (filter (\x -> fst x == mainP) $ nDeps \\ oDeps)
-        _ -> error "ParseFailure"
+        _ -> error "ParseFailure" --TODO: Handle error properly
 
 -- | Checks for new versions added to the cabal file.
 checkNewVersions :: IO [(String, String)]
 checkNewVersions = do
-    pName <- parse packageName' "" <$> readFile "gendeps.dot"
-    oldVersions <- parse versions "" <$> readFile "depsVers.txt"
-    newVersions <- parse versions "" <$> readFile "depsVersUpdated.txt"
-    case (pName, oldVersions, newVersions) of
-        (Right mainP, Right oVersions, Right nVersions) -> return $ nVersions \\ oVersions
-        _ -> error "ParseFailure"
+    oldVersions <- parse versions "" <$> readFile "repoinfo/depsVers.txt"
+    newVersions <- parse versions "" <$> readFile "repoinfo/depsVersUpdated.txt"
+    case (oldVersions, newVersions) of
+        (Right oVersions, Right nVersions) -> return $ nVersions \\ oVersions
+        _ -> error "ParseFailure" --TODO: Handle error properly
 
 -- | Checks if "auditor.db" exists in pwd, if not creates it with the
 -- tables `auditor` (which holds all the dependency data) and `hash`
@@ -118,9 +117,9 @@ createDB = do
         then do
              print "auditor.db present"
              print "Generating new dot file and checking hash"
-             callCommand "stack dot --external > gendepsUpdated.dot"
-             callCommand "stack ls dependencies > depsVersUpdated.txt"
-             contents <- (++) <$> readFile "gendepsUpdated.dot" <*> readFile "depsVersUpdated.txt"
+             callCommand "stack dot --external > repoinfo/gendepsUpdated.dot"
+             callCommand "stack ls dependencies > repoinfo/depsVersUpdated.txt"
+             contents <- (++) <$> readFile "repoinfo/gendepsUpdated.dot" <*> readFile "repoinfo/depsVersUpdated.txt"
              checkHash $ hash contents
         else do
              callCommand "sqlite3 auditor.db \
