@@ -1,7 +1,11 @@
 module Types
-       ( Package (..)
-       , AnalysisStatus (..)
+       ( AnalysisStatus (..)
+       , DirectDependency
        , HashStatus (..)
+       , IndirectDependency
+       , Package (..)
+       , PackageName
+       , Version
        ) where
 
 import           Data.Text          (Text)
@@ -33,3 +37,8 @@ data HashStatus = HashMatches
                 | HashDoesNotMatch
                 | HashNotFound
                 deriving Show
+
+type Version = String
+type IndirectDependency = String
+type DirectDependency = String
+type PackageName = String

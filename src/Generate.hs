@@ -1,35 +1,69 @@
 module Generate
-       ( checkNewPackages
+       ( allRepoDeps
+       , allRepoVers
+       , checkNewPackages
        , checkNewVersions
        , createDB
        , createDeps
+       , directDeps
        , insertDB
+       , insertNewDirectDB
        ) where
 
-import           Control.Monad    (join)
-import           Data.Either      (fromRight)
 import           Data.Hashable    (hash)
 import           Data.List        (nub, (\\))
 import           Data.Maybe       (fromMaybe)
 import           Data.Text        (pack)
 import           Data.Time.Clock  (getCurrentTime)
 import           Parser           (allDependencies, packageName', versions)
-import           Sorting          (sortParseResults, tuplesToList)
-import           Sqlite           (checkHash, insertHash, insertPackage)
+import           Sorting          (groupParseResults, tuplesToList)
+import           Sqlite           (checkHash, insertAddedPackage, insertHash,
+                                   insertPackage)
 import           System.Directory (getDirectoryContents)
 import           System.Process   (callCommand)
 import           Text.Parsec      (parse)
-import           Types            (Package (..), HashStatus (..))
+import           Types            (DirectDependency, HashStatus (..),
+                                   IndirectDependency, Package (..),
+                                   PackageName, Version)
+
+-- | Returns all the packages in the repo and their direct depdendencies.
+-- The repo itself is considered a package. NB: The direct dependency in
+-- the tuple is the direct dependency of the `PackageName` within that tuple.
+allRepoDeps :: IO [(PackageName , DirectDependency)]
+allRepoDeps = do
+    pDeps <- parse allDependencies "" <$> readFile "repoinfo/gendeps.dot"
+    case pDeps of
+        Left parserError -> error $ show parserError
+        Right deps       -> return deps
+
+-- | Returns all the packages in the repo and their versions. Again
+-- the repo itself is considered a package and is included. NB: The version
+-- in the tuple is the version of the `PackageName` within that tuple.
+allRepoVers :: IO [(PackageName, Version)]
+allRepoVers = do
+    pVers <- parse versions "" <$> readFile "repoinfo/depsVers.txt"
+    case pVers of
+        Left parserError -> error $ show parserError
+        Right vers       -> return vers
 
 createDeps :: IO ()
 createDeps = do
     callCommand "stack dot --external > repoinfo/gendeps.dot"
     callCommand "stack ls dependencies > repoinfo/depsVers.txt"
 
+-- | Returns direct depedencies of the repo.
+directDeps :: IO [String]
+directDeps = do
+    rName <- repoName
+    aDeps <- allRepoDeps
+    let repoDirDeps = filter (\x -> rName == fst x) (groupParseResults aDeps)
+    pure $ concatMap snd repoDirDeps
+
+
 -- | Writes direct dependencies to the db.
-insDirDeps :: String -> [(String,[String])] -> [(String,String)] -> IO ()
-insDirDeps mainP allDeps pVersions  = do
-    let directDeps = filter (\x -> fst x == mainP) allDeps
+insDirDeps :: [(PackageName, Version)] -> IO ()
+insDirDeps pVersions  = do
+    dDeps <- directDeps
     cTime <- getCurrentTime
     mapM_ (\x -> insertPackage
                      (Package
@@ -38,7 +72,7 @@ insDirDeps mainP allDeps pVersions  = do
                          cTime
                          True
                          True
-                         [])) (join $ snd <$> directDeps)
+                         [])) dDeps
     -- |TODO: stillUsed will have to be updated in the DB after
     -- 1) Generate the new stack dot file
     -- 2) Check all the direct dependencies against what
@@ -47,10 +81,13 @@ insDirDeps mainP allDeps pVersions  = do
     --    Also default `[AnalysisStatus]` to [] for now.
 
 -- | Writes indirect dependencies to the db.
-insIndirDeps :: String -> [(String,[String])] -> [(String,String)] -> IO ()
-insIndirDeps mainP allDeps pVersions = do
-    let directDeps = tuplesToList $ filter (\x -> fst x == mainP) allDeps
-    let indirectDeps = nub (tuplesToList allDeps) \\ directDeps
+insIndirDeps
+    :: [(PackageName, [IndirectDependency])]
+    -> [(PackageName, Version)]
+    -> IO ()
+insIndirDeps allDeps pVersions = do
+    dDeps <- directDeps
+    let indirectDeps = nub (tuplesToList allDeps) \\ dDeps
     cTime <- getCurrentTime
     mapM_ (\x -> insertPackage
                      (Package
@@ -64,46 +101,31 @@ insIndirDeps mainP allDeps pVersions = do
 -- | Inserts direct and indirect dependencies into the sqlite db.
 insertDB :: IO ()
 insertDB = do
-    pName <- parse packageName' "" <$> readFile "repoinfo/gendeps.dot"
-    pDeps <- parse allDependencies "" <$> readFile "repoinfo/gendeps.dot"
-    pVersions <- parse versions "" <$> readFile "repoinfo/depsVers.txt"
-    case (pDeps, pVersions) of
-        (Left pErrorDep , Left pErrorVer)  ->
-            error ("Dependency parser:" ++ show pErrorDep ++ "Version parser: " ++ show pErrorVer)
-        (Left pErrorDep , Right vResult)   -> do
-            print pErrorDep
-            print vResult
-        (Right pResult , Left pErrorVer)   -> do
-            print pErrorVer
-            print pResult
-        (Right pResult, Right vResult)     -> do
-            insDirDeps
-                (fromRight "Insert direct dependancies failure" pName) -- |TODO: Handle pName properly
-                (sortParseResults pResult) vResult
-            insIndirDeps
-                (fromRight "Insert indirect dependencies failure" pName) -- |TODO: Handle pName properly
-                (sortParseResults pResult) vResult
-            (++) <$> readFile "repoinfo/gendeps.dot" <*> readFile "repoinfo/depsVers.txt" >>= insertHash . hash
+    rDeps <- allRepoDeps
+    rVersions <- allRepoVers
+    insDirDeps rVersions
+    insIndirDeps (groupParseResults rDeps) rVersions
+    (++) <$> readFile "repoinfo/gendeps.dot"
+         <*> readFile "repoinfo/depsVers.txt" >>= insertHash . hash
 
--- | Checks for new packages added to the cabal file.
-checkNewPackages :: IO [String]
+
+-- | Checks for new direct dependencies added to the cabal file.
+checkNewPackages :: IO [(String, String)]
 checkNewPackages = do
-    pName <- parse packageName' "" <$> readFile "repoinfo/gendeps.dot"
-    oldDeps <- parse allDependencies "" <$> readFile "repoinfo/gendeps.dot"
+    oldDeps <- parse allDependencies "" <$> readFile "repoinfo/gendeps.dot" -- TODO: refactor
     newDeps <- parse allDependencies "" <$> readFile "repoinfo/gendepsUpdated.dot"
-    case (newDeps, oldDeps, pName) of
-        (Right nDeps, Right oDeps, Right mainP) ->
-            return $ map snd (filter (\x -> fst x == mainP) $ nDeps \\ oDeps)
-        _ -> error "ParseFailure" --TODO: Handle error properly
+    case (newDeps, oldDeps) of
+        (Right nDeps, Right oDeps) -> return $ nDeps \\ oDeps
+        _                                       -> error "ParseFailure" --TODO: Handle error properly
 
 -- | Checks for new versions added to the cabal file.
 checkNewVersions :: IO [(String, String)]
 checkNewVersions = do
-    oldVersions <- parse versions "" <$> readFile "repoinfo/depsVers.txt"
+    oldVersions <- parse versions "" <$> readFile "repoinfo/depsVers.txt" -- TODO: refactor
     newVersions <- parse versions "" <$> readFile "repoinfo/depsVersUpdated.txt"
     case (oldVersions, newVersions) of
         (Right oVersions, Right nVersions) -> return $ nVersions \\ oVersions
-        _ -> error "ParseFailure" --TODO: Handle error properly
+        _                                  -> error "ParseFailure" --TODO: Handle error properly
 
 -- | Checks if "auditor.db" exists in pwd, if not creates it with the
 -- tables `auditor` (which holds all the dependency data) and `hash`
@@ -132,7 +154,7 @@ createDB = do
                                         \, PRIMARY KEY( package_name )); \
                   \CREATE TABLE hash ( dot_hash INT NOT NULL\
                                         \, PRIMARY KEY ( dot_hash )); \
-                  \CREATE TABLE newPackages ( package_name VARCHAR NOT NULL\
+                  \CREATE TABLE diff ( package_name VARCHAR NOT NULL\
                                         \, package_version VARCHAR NOT NULL\
                                         \, date_first_seen VARCHAR NOT NULL\
                                         \, direct_dep VARCHAR NOT NULL\
@@ -141,4 +163,46 @@ createDB = do
                                         \, PRIMARY KEY( package_name )); \""
              return HashNotFound
 
+-- | Inserts new direct dependencies into the sqlite db.
+insertNewDirectDB :: IO ()
+insertNewDirectDB = do
+    dDeps <- directDeps
+    pVersions <- parse versions "" <$> readFile "repoinfo/depsVersUpdated.txt" -- TODO: refactor
+    cTime <- getCurrentTime
+    case pVersions of
+        (Right versionsL) ->
+            mapM_ (\x -> insertAddedPackage
+                (Package
+                    (pack x)
+                    (pack $ fromMaybe "No version Found" (lookup x versionsL))
+                    cTime
+                    True
+                    True
+                    [])) dDeps
+        _                            -> error "Parse Failure"    --TODO: Handle failure propery
+{-
+insertNewIndirectDB :: IO ()
+insertNewIndirectDB = do
+    newPs <- checkNewPackages
+    pVersions <- parse versions "" <$> readFile "repoinfo/depsVersUpdated.txt"
+    cTime <- getCurrentTime
+    case pVersions of
+        (Right versionsL) ->
+            mapM_ (\x -> insertAddedPackage
+                (Package
+                    (pack x)
+                    (pack $ fromMaybe "No version Found" (lookup x versionsL))
+                    cTime
+                    True
+                    True
+                    [])) newPs
+        _                            -> error "Parse Failure"    --TODO: Handle failure propery
 
+-}
+
+repoName :: IO String
+repoName = do
+    name <- parse packageName' "" <$> readFile "repoinfo/gendeps.dot"
+    case name of
+        Left parserError -> error $ show parserError
+        Right deps       -> return deps

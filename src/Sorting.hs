@@ -1,13 +1,13 @@
 module Sorting
-       ( tuplesToList
-       , sortParseResults
+       ( groupParseResults
+       , tuplesToList
        ) where
 
 import           Data.List (groupBy)
 
 -- | Sorts the results of the parser to [(package, [directDependencies])]
-sortParseResults :: [(String, String)] -> [(String, [String])]
-sortParseResults list = do
+groupParseResults :: [(String, String)] -> [(String, [String])]
+groupParseResults list = do
     let grouped = groupBy (\x y -> fst x == fst y) list
     [(fst $ head x, map snd x)| x <- grouped]
 

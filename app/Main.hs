@@ -1,6 +1,5 @@
 module Main where
 
-import           Data.List (intersperse)
 import           Generate  (checkNewPackages, checkNewVersions, createDB,
                             createDeps, insertDB)
 import           Sqlite    (queryAuditor)
@@ -13,8 +12,10 @@ main = do
         HashMatches -> print "Hashes match, dependancy tree has not been changed."
         HashDoesNotMatch -> do
             print "Hashes do not match, dependency tree has changed."
-            checkNewPackages >>= (\x -> print $ "New package(s): " ++ (concat $ intersperse ", " x))
-            checkNewVersions >>= (\x -> print $ "New package versions: " ++ (concat $ intersperse ", " (map show x)))
+            checkNewPackages >>= (\x -> print $ "New package(s): " ++ (show x))
+            checkNewVersions >>= (\x -> print $ "New package versions: " ++ (show x))
+            -- TODO: Need to incorporate optparse-applicative to give the option to
+            -- load new/removed pkgs (and changed versions)
         HashNotFound -> do
             print "Hash not found, generating db."
             createDeps

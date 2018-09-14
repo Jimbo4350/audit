@@ -10,7 +10,9 @@ module Sqlite
        ( checkHash
        , insertHash
        , insertPackage
+       , insertAddedPackage
        , queryAuditor
+       , queryDiff
        , queryHash
        ) where
 
@@ -24,7 +26,7 @@ import           Database.Beam          (Beamable, Columnar, Database,
                                          runSelectReturningOne, select)
 import           Database.Beam.Sqlite
 import           Database.SQLite.Simple (close, open)
-import           Types                  (Package (..), HashStatus (..))
+import           Types                  (HashStatus (..), Package (..))
 
 -- | Auditor Table
 
@@ -149,6 +151,23 @@ insertPackage (Package pName pVersion dateFS dDep sUsed aStatus) = do
                      ]
     close conn
 
+-- | Takes a newly added `Package` and inserts it into the Diff table.
+insertAddedPackage :: Package -> IO ()
+insertAddedPackage (Package pName pVersion dateFS dDep sUsed aStatus) = do
+    conn <- open "auditor.db"
+    runBeamSqliteDebug putStrLn {- for debug output -} conn $ runInsert $
+        insert (_diff  auditorDb) $
+        insertValues [ Diff
+                           pName
+                           pVersion
+                           (pack $ show dateFS)
+                           (pack $ show dDep)
+                           (pack $ show sUsed)
+                           (pack $ show aStatus)
+                     ]
+    close conn
+
+
 -- | Query's all enteries in the Auditor table.
 queryAuditor :: IO ()
 queryAuditor  = do
@@ -168,3 +187,12 @@ queryHash = do
       runSelectReturningOne $ select allEntries
     close conn
     return entry
+
+queryDiff:: IO ()
+queryDiff  = do
+    conn <- open "auditor.db"
+    let allEntries = all_ (_diff auditorDb)
+    runBeamSqliteDebug putStrLn conn $ do
+      entries <- runSelectReturningList $ select allEntries
+      mapM_ (liftIO . putStrLn . show) entries
+    close conn
