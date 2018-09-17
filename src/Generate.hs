@@ -1,13 +1,17 @@
 module Generate
-       ( allRepoDeps
-       , allRepoVers
+       ( allOriginalRepoDeps
+       , allOriginalRepoVers
+       , allUpdatedRepoDeps
+       , checkNewIndirectPackages
        , checkNewPackages
        , checkNewVersions
+       , checkRemovedPackages
        , createDB
        , createDeps
-       , directDeps
+       , originalDirectDeps
        , insertDB
        , insertNewDirectDB
+       , insertNewIndirectDB
        ) where
 
 import           Data.Hashable    (hash)
@@ -29,9 +33,16 @@ import           Types            (DirectDependency, HashStatus (..),
 -- | Returns all the packages in the repo and their direct depdendencies.
 -- The repo itself is considered a package. NB: The direct dependency in
 -- the tuple is the direct dependency of the `PackageName` within that tuple.
-allRepoDeps :: IO [(PackageName , DirectDependency)]
-allRepoDeps = do
+allOriginalRepoDeps :: IO [(PackageName , DirectDependency)]
+allOriginalRepoDeps = do
     pDeps <- parse allDependencies "" <$> readFile "repoinfo/gendeps.dot"
+    case pDeps of
+        Left parserError -> error $ show parserError
+        Right deps       -> return deps
+
+allUpdatedRepoDeps :: IO [(PackageName , DirectDependency)]
+allUpdatedRepoDeps = do
+    pDeps <- parse allDependencies "" <$> readFile "repoinfo/gendepsUpdated.dot"
     case pDeps of
         Left parserError -> error $ show parserError
         Right deps       -> return deps
@@ -39,9 +50,16 @@ allRepoDeps = do
 -- | Returns all the packages in the repo and their versions. Again
 -- the repo itself is considered a package and is included. NB: The version
 -- in the tuple is the version of the `PackageName` within that tuple.
-allRepoVers :: IO [(PackageName, Version)]
-allRepoVers = do
+allOriginalRepoVers :: IO [(PackageName, Version)]
+allOriginalRepoVers = do
     pVers <- parse versions "" <$> readFile "repoinfo/depsVers.txt"
+    case pVers of
+        Left parserError -> error $ show parserError
+        Right vers       -> return vers
+
+allUpdatedRepoVers :: IO [(PackageName, Version)]
+allUpdatedRepoVers = do
+    pVers <- parse versions "" <$> readFile "repoinfo/depsVersUpdated.txt"
     case pVers of
         Left parserError -> error $ show parserError
         Right vers       -> return vers
@@ -52,18 +70,24 @@ createDeps = do
     callCommand "stack ls dependencies > repoinfo/depsVers.txt"
 
 -- | Returns direct depedencies of the repo.
-directDeps :: IO [String]
-directDeps = do
+originalDirectDeps :: IO [String]
+originalDirectDeps = do
     rName <- repoName
-    aDeps <- allRepoDeps
+    aDeps <- allOriginalRepoDeps
     let repoDirDeps = filter (\x -> rName == fst x) (groupParseResults aDeps)
     pure $ concatMap snd repoDirDeps
 
+updatedDirectDeps :: IO [String]
+updatedDirectDeps = do
+    rName <- repoName
+    aDeps <- allUpdatedRepoDeps
+    let repoDirDeps = filter (\x -> rName == fst x) (groupParseResults aDeps)
+    pure $ concatMap snd repoDirDeps
 
 -- | Writes direct dependencies to the db.
 insDirDeps :: [(PackageName, Version)] -> IO ()
 insDirDeps pVersions  = do
-    dDeps <- directDeps
+    dDeps <- originalDirectDeps
     cTime <- getCurrentTime
     mapM_ (\x -> insertPackage
                      (Package
@@ -86,7 +110,7 @@ insIndirDeps
     -> [(PackageName, Version)]
     -> IO ()
 insIndirDeps allDeps pVersions = do
-    dDeps <- directDeps
+    dDeps <- originalDirectDeps
     let indirectDeps = nub (tuplesToList allDeps) \\ dDeps
     cTime <- getCurrentTime
     mapM_ (\x -> insertPackage
@@ -101,32 +125,55 @@ insIndirDeps allDeps pVersions = do
 -- | Inserts direct and indirect dependencies into the sqlite db.
 insertDB :: IO ()
 insertDB = do
-    rDeps <- allRepoDeps
-    rVersions <- allRepoVers
+    rDeps <- allOriginalRepoDeps
+    rVersions <- allOriginalRepoVers
     insDirDeps rVersions
     insIndirDeps (groupParseResults rDeps) rVersions
     (++) <$> readFile "repoinfo/gendeps.dot"
          <*> readFile "repoinfo/depsVers.txt" >>= insertHash . hash
 
+-- | Returns all new indirect dependencies. NB: The hierarchy is lost and
+-- packages in this list could be dependencies of each other.
+checkNewIndirectPackages :: IO [String]
+checkNewIndirectPackages = do
+    aOrgDeps <- allOriginalRepoDeps
+    oDirDeps <- originalDirectDeps
+    let originalIndirDeps =  (nub . tuplesToList $ groupParseResults aOrgDeps) \\ oDirDeps
+    aUpdDeps <- allUpdatedRepoDeps
+    uDirDeps <- updatedDirectDeps
+    let updatedIndirDeps =  (nub . tuplesToList $ groupParseResults aUpdDeps) \\ uDirDeps
+    return $ updatedIndirDeps \\ originalIndirDeps
 
 -- | Checks for new direct dependencies added to the cabal file.
 checkNewPackages :: IO [(String, String)]
 checkNewPackages = do
+    rName <- repoName
     oldDeps <- parse allDependencies "" <$> readFile "repoinfo/gendeps.dot" -- TODO: refactor
     newDeps <- parse allDependencies "" <$> readFile "repoinfo/gendepsUpdated.dot"
     case (newDeps, oldDeps) of
-        (Right nDeps, Right oDeps) -> return $ nDeps \\ oDeps
+        (Right nDeps, Right oDeps) -> return $ filter (\x -> rName == fst x) nDeps \\ oDeps
         _                                       -> error "ParseFailure" --TODO: Handle error properly
 
 -- | Checks for new versions added to the cabal file.
 checkNewVersions :: IO [(String, String)]
 checkNewVersions = do
+    rName <- repoName
     oldVersions <- parse versions "" <$> readFile "repoinfo/depsVers.txt" -- TODO: refactor
     newVersions <- parse versions "" <$> readFile "repoinfo/depsVersUpdated.txt"
     case (oldVersions, newVersions) of
-        (Right oVersions, Right nVersions) -> return $ nVersions \\ oVersions
+        (Right oVersions, Right nVersions) -> return $ filter (\x -> rName == fst x) nVersions \\ oVersions
         _                                  -> error "ParseFailure" --TODO: Handle error properly
 
+-- | Checks for direct dependencies that were removed.
+checkRemovedPackages :: IO [(String, String)]
+checkRemovedPackages = do
+    rName <- repoName
+    oldDeps <- parse allDependencies "" <$> readFile "repoinfo/gendeps.dot" -- TODO: refactor
+    newDeps <- parse allDependencies "" <$> readFile "repoinfo/gendepsUpdated.dot"
+    case (newDeps, oldDeps) of
+        (Right nDeps, Right oDeps) ->  return $ filter (\x -> rName == fst x) (oDeps \\ nDeps)
+
+        _                          -> error "ParseFailure" --TODO: Handle error properly
 -- | Checks if "auditor.db" exists in pwd, if not creates it with the
 -- tables `auditor` (which holds all the dependency data) and `hash`
 -- which holds the hash of the existing .dot file.
@@ -166,39 +213,32 @@ createDB = do
 -- | Inserts new direct dependencies into the sqlite db.
 insertNewDirectDB :: IO ()
 insertNewDirectDB = do
-    dDeps <- directDeps
-    pVersions <- parse versions "" <$> readFile "repoinfo/depsVersUpdated.txt" -- TODO: refactor
+    dDeps <- checkNewPackages
+    pVersions <- allUpdatedRepoVers
     cTime <- getCurrentTime
-    case pVersions of
-        (Right versionsL) ->
-            mapM_ (\x -> insertAddedPackage
-                (Package
-                    (pack x)
-                    (pack $ fromMaybe "No version Found" (lookup x versionsL))
-                    cTime
-                    True
-                    True
-                    [])) dDeps
-        _                            -> error "Parse Failure"    --TODO: Handle failure propery
-{-
+    mapM_ ((\x -> insertAddedPackage
+        (Package
+            (pack x)
+            (pack $ fromMaybe "No version Found" (lookup x pVersions))
+            cTime
+            True
+            True
+            [])) . snd) dDeps
+
+-- | Inserts new indirect dependencies into the sqlite db.
 insertNewIndirectDB :: IO ()
 insertNewIndirectDB = do
-    newPs <- checkNewPackages
-    pVersions <- parse versions "" <$> readFile "repoinfo/depsVersUpdated.txt"
+    newPs <- checkNewIndirectPackages
+    pVersions <- allUpdatedRepoVers
     cTime <- getCurrentTime
-    case pVersions of
-        (Right versionsL) ->
-            mapM_ (\x -> insertAddedPackage
-                (Package
-                    (pack x)
-                    (pack $ fromMaybe "No version Found" (lookup x versionsL))
-                    cTime
-                    True
-                    True
-                    [])) newPs
-        _                            -> error "Parse Failure"    --TODO: Handle failure propery
-
--}
+    mapM_ (\x -> insertAddedPackage
+        (Package
+            (pack x)
+            (pack $ fromMaybe "No version Found" (lookup x pVersions))
+            cTime
+            False
+            True
+            [])) newPs
 
 repoName :: IO String
 repoName = do
