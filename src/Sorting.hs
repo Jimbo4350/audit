@@ -1,5 +1,6 @@
 module Sorting
        ( allOriginalRepoDeps
+       , allOriginalRepoIndirDeps
        , allOriginalRepoVers
        , allUpdatedRepoDeps
        , allUpdatedRepoVers
@@ -13,8 +14,7 @@ module Sorting
        , tuplesToList
        ) where
 
-import           Data.List   (groupBy)
-import           Data.List   (nub, (\\))
+import           Data.List   (nub, (\\), groupBy)
 import           Parser      (allDependencies, packageName', versions)
 import           Text.Parsec (parse)
 import           Types       (DirectDependency, PackageName, Version)
@@ -36,6 +36,12 @@ allUpdatedRepoDeps = do
     case pDeps of
         Left parserError -> error $ show parserError
         Right deps       -> return deps
+
+allOriginalRepoIndirDeps :: IO [PackageName]
+allOriginalRepoIndirDeps = do
+    allDeps <- groupParseResults <$> allOriginalRepoDeps
+    dDeps <- originalDirectDeps
+    return $ nub (tuplesToList allDeps) \\ dDeps
 
 -- | Returns all the packages in the repo and their versions. Again
 -- the repo itself is considered a package and is included. NB: The version

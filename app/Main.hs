@@ -1,12 +1,8 @@
 module Main where
 
-import           Generate            (audit, commandHandler, createDB,
-                                      createDeps, insertDB, insertNewDirectDB,
-                                      insertNewIndirectDB, update)
+import           Generate            (commandHandler)
 import           Options.Applicative
 import           Parser              (getCommand)
-import           Sqlite              (queryAuditor)
-import           Types               (Command (..), HashStatus (..))
 
 -- | Usage example "stack exec -- audit-exe --audit audit"
 

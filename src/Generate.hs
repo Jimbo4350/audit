@@ -4,31 +4,26 @@ module Generate
        , createDB
        , createDeps
        , originalDirectDeps
-       , insertDB
-       , insertNewDirectDB
-       , insertNewIndirectDB
+       , populateAuditorTable
        , update
+       , updateDiffTableDirectDeps
+       , updateDiffTableIndirectDeps
        ) where
 
 import           Data.Hashable    (hash)
-import           Data.List        (nub, (\\))
 import           Data.Maybe       (fromMaybe)
-import           Data.Text        (pack)
+import           Data.Text        (pack, unpack)
 import           Data.Time.Clock  (getCurrentTime)
-import           Sorting          (allOriginalRepoDeps, allOriginalRepoVers,
-                                   allUpdatedRepoVers, checkNewIndirectPackages,
-                                   checkNewPackages, checkNewVersions,
-                                   checkRemovedPackages, groupParseResults,
-                                   originalDirectDeps, tuplesToList)
-import           Sqlite           (checkHash, insertAddedPackage, insertHash,
-                                   insertPackage, queryAuditor)
+import           Sorting          (allOriginalRepoIndirDeps,
+                                   allOriginalRepoVers, allUpdatedRepoVers,
+                                   checkNewIndirectPackages, checkNewPackages,
+                                   checkNewVersions, checkRemovedPackages,
+                                   originalDirectDeps)
+import           Sqlite           (checkHash, insertHash, insertPackageAuditor,
+                                   insertPackageDiff, queryAuditor, queryDiff)
 import           System.Directory (getDirectoryContents)
 import           System.Process   (callCommand)
-import           Types            (Command (..), HashStatus (..),
-                                   IndirectDependency, Package (..),
-                                   PackageName, Version)
-
-
+import           Types            (Command (..), HashStatus (..), Package (..))
 
 -- | Checks if "auditor.db" exists in pwd, if not creates it with the
 -- tables `auditor` (which holds all the dependency data) and `hash`
@@ -70,13 +65,16 @@ createDeps :: IO ()
 createDeps = do
     callCommand "stack dot --external > repoinfo/gendeps.dot"
     callCommand "stack ls dependencies > repoinfo/depsVers.txt"
+    print "I'm here"
 
 -- | Writes direct dependencies to the db.
-insDirDeps :: [(PackageName, Version)] -> IO ()
-insDirDeps pVersions  = do
+insDirDepsAuditor :: IO ()
+insDirDepsAuditor = do
+    pVersions <- allOriginalRepoVers
     dDeps <- originalDirectDeps
     cTime <- getCurrentTime
-    mapM_ (\x -> insertPackage
+    --insertDependencies dDeps insertPackageAuditor True
+    mapM_ (\x -> insertPackageAuditor
                      (Package
                          (pack x)
                          (pack $ fromMaybe "No version Found" (lookup x pVersions))
@@ -92,15 +90,12 @@ insDirDeps pVersions  = do
     --    Also default `[AnalysisStatus]` to [] for now.
 
 -- | Writes indirect dependencies to the db.
-insIndirDeps
-    :: [(PackageName, [IndirectDependency])]
-    -> [(PackageName, Version)]
-    -> IO ()
-insIndirDeps allDeps pVersions = do
-    dDeps <- originalDirectDeps
-    let indirectDeps = nub (tuplesToList allDeps) \\ dDeps
+insIndirDepsAuditor :: IO ()
+insIndirDepsAuditor = do
+    pVersions <- allOriginalRepoVers
+    indirectDeps <- allOriginalRepoIndirDeps
     cTime <- getCurrentTime
-    mapM_ (\x -> insertPackage
+    mapM_ (\x -> insertPackageAuditor
                      (Package
                          (pack x)
                          (pack $ fromMaybe "No version Found" (lookup x pVersions))
@@ -110,39 +105,42 @@ insIndirDeps allDeps pVersions = do
                          [])) indirectDeps
 
 -- | Inserts direct and indirect dependencies into the sqlite db.
-insertDB :: IO ()
-insertDB = do
-    rDeps <- allOriginalRepoDeps
-    rVersions <- allOriginalRepoVers
-    insDirDeps rVersions
-    insIndirDeps (groupParseResults rDeps) rVersions
+populateAuditorTable :: IO ()
+populateAuditorTable = do
+    insDirDepsAuditor
+    insIndirDepsAuditor
     (++) <$> readFile "repoinfo/gendeps.dot"
          <*> readFile "repoinfo/depsVers.txt" >>= insertHash . hash
 
 
 
 -- | Inserts new direct dependencies into the sqlite db.
-insertNewDirectDB :: IO ()
-insertNewDirectDB = do
+updateDiffTableDirectDeps :: IO ()
+updateDiffTableDirectDeps = do
     dDeps <- checkNewPackages
-    pVersions <- allUpdatedRepoVers
-    cTime <- getCurrentTime
-    mapM_ ((\x -> insertAddedPackage
-        (Package
-            (pack x)
-            (pack $ fromMaybe "No version Found" (lookup x pVersions))
-            cTime
-            True
-            True
-            [])) . snd) dDeps
+    depsInDiff <- queryDiff
+    -- TODO: Refactor using unless/when
+    if all (== False ) [x `elem` map unpack depsInDiff | x <- map snd dDeps]
+        then do
+            pVersions <- allUpdatedRepoVers
+            cTime <- getCurrentTime
+            mapM_ ((\x -> insertPackageDiff
+                (Package
+                    (pack x)
+                    (pack $ fromMaybe "No version Found" (lookup x pVersions))
+                    cTime
+                    True
+                    True
+                    [])) . snd) dDeps
+            else print "Already added"
 
 -- | Inserts new indirect dependencies into the sqlite db.
-insertNewIndirectDB :: IO ()
-insertNewIndirectDB = do
+updateDiffTableIndirectDeps :: IO ()
+updateDiffTableIndirectDeps = do
     newPs <- checkNewIndirectPackages
     pVersions <- allUpdatedRepoVers
     cTime <- getCurrentTime
-    mapM_ (\x -> insertAddedPackage
+    mapM_ (\x -> insertPackageDiff
         (Package
             (pack x)
             (pack $ fromMaybe "No version Found" (lookup x pVersions))
@@ -166,20 +164,39 @@ audit = do
             HashMatches -> print "Hashes match, dependancy tree has not been changed."
             HashDoesNotMatch -> do
                 print "Hashes do not match, dependency tree has changed."
-                checkNewPackages >>= (\x -> print $ "New package(s): " ++ (show $ map snd x))
-                checkNewVersions >>= (\x -> print $ "New package versions: " ++ show x)
-                checkRemovedPackages >>= (\x -> print $ "Removed packages: " ++ show x)
+                checkNewPackages >>= (\x -> print $ "New dependency(s): " ++ (show $ map snd x))
+                checkNewVersions >>= (\x -> print $ "New dependency versions: " ++ show x)
+                checkRemovedPackages >>= (\x -> print $ "Removed dependencies: " ++ show x)
+                updateDiffTableDirectDeps
+                updateDiffTableIndirectDeps
+
                 -- TODO: Need to incorporate optparse-applicative to give the option to
                 -- load new/removed pkgs (and changed versions)
             HashNotFound -> do
                 print "Hash not found, generating db."
                 createDeps
-                insertDB
-                putStrLn "Insert example package into auditor.db and query db."
-                queryAuditor
+                populateAuditorTable
 
 update :: IO ()
-update = do
-    insertNewDirectDB
-    insertNewIndirectDB
+update = print "Should update Auditor table with what's in the Diff table"
 
+------------------------------Helpers-----------------------------------
+
+-- | Insert dependencies into a db table.
+-- depList    = list of dependencies you want to insert.
+-- tableIns   = insertion function (changes depending on which table you
+--              want to insert into)
+-- dirOrIndir = Bool signlaing whether or not the depdencies you are
+--              inserting are direct or indirect.
+insertDependencies :: [String] -> (Package -> IO ()) -> Bool -> IO ()
+insertDependencies depList tableIns dirOrIndir = do
+    cTime <- getCurrentTime
+    pVersions <- allUpdatedRepoVers
+    mapM_ (\x -> tableIns
+        (Package
+            (pack x)
+            (pack $ fromMaybe "No version Found" (lookup x pVersions))
+            cTime
+            dirOrIndir
+            True
+            [])) depList

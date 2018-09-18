@@ -9,8 +9,8 @@
 module Sqlite
        ( checkHash
        , insertHash
-       , insertPackage
-       , insertAddedPackage
+       , insertPackageAuditor
+       , insertPackageDiff
        , queryAuditor
        , queryDiff
        , queryHash
@@ -137,26 +137,19 @@ insertHash dotHash = do
     close conn
 
 -- | Takes a `Package` and inserts it into the Auditor table.
-insertPackage :: Package -> IO ()
-insertPackage (Package pName pVersion dateFS dDep sUsed aStatus) = do
+insertPackageAuditor :: Package -> IO ()
+insertPackageAuditor pkg = do
     conn <- open "auditor.db"
     runBeamSqliteDebug putStrLn {- for debug output -} conn $ runInsert $
         insert (_auditor auditorDb) $
-        insertValues [ Auditor
-                           pName
-                           pVersion
-                           (pack $ show dateFS)
-                           (pack $ show dDep)
-                           (pack $ show sUsed)
-                           (pack $ show aStatus)
-                     ]
+        insertValues [ toAuditor pkg ]
     close conn
 
 -- | Takes a newly added `Package` and inserts it into the Diff table.
-insertAddedPackage :: Package -> IO ()
-insertAddedPackage (Package pName pVersion dateFS dDep sUsed aStatus) = do
+insertPackageDiff :: Package -> IO ()
+insertPackageDiff (Package pName pVersion dateFS dDep sUsed aStatus) = do
     conn <- open "auditor.db"
-    runBeamSqliteDebug putStrLn {- for debug output -} conn $ runInsert $
+    runBeamSqlite conn $ runInsert $
         insert (_diff  auditorDb) $
         insertValues [ Diff
                            pName
@@ -169,45 +162,48 @@ insertAddedPackage (Package pName pVersion dateFS dDep sUsed aStatus) = do
     close conn
 
 updateAuditor :: Package -> IO ()
-updateAuditor (Package pName pVersion dateFS dDep sUsed aStatus) = do
+updateAuditor pkg = do
     conn <- open "auditor.db"
     runBeamSqliteDebug putStrLn {- for debug output -} conn $ runInsert $
         insert (_auditor  auditorDb) $
-        insertValues [ Auditor
-                           pName
-                           pVersion
-                           (pack $ show dateFS)
-                           (pack $ show dDep)
-                           (pack $ show sUsed)
-                           (pack $ show aStatus)
-                     ]
+        insertValues [ toAuditor pkg ]
     close conn
 
--- | Query's all enteries in the Auditor table.
-queryAuditor :: IO ()
+-- | Returns all enteries in the Auditor table.
+queryAuditor :: IO [Auditor]
 queryAuditor  = do
     conn <- open "auditor.db"
     let allEntries = all_ (_auditor auditorDb)
-    runBeamSqliteDebug putStrLn conn $ do
-      entries <- runSelectReturningList $ select allEntries
-      mapM_ (liftIO . putStrLn . show) entries
+    entries <- runBeamSqliteDebug putStrLn conn $
+        runSelectReturningList $ select allEntries
     close conn
+    return entries
 
 -- | Query and returns the hash in db.
-queryHash :: IO (Maybe (HashT Identity))
+queryHash :: IO (Maybe Hash)
 queryHash = do
     conn <- open "auditor.db"
     let allEntries = all_ (_hash auditorDb)
     entry <- runBeamSqliteDebug putStrLn conn $
-      runSelectReturningOne $ select allEntries
+             runSelectReturningOne $ select allEntries
     close conn
     return entry
 
-queryDiff:: IO ()
+queryDiff:: IO [Text]
 queryDiff  = do
     conn <- open "auditor.db"
     let allEntries = all_ (_diff auditorDb)
-    runBeamSqliteDebug putStrLn conn $ do
-      entries <- runSelectReturningList $ select allEntries
-      mapM_ (liftIO . putStrLn . show) entries
+    entries <- runBeamSqliteDebug putStrLn conn $
+               runSelectReturningList $ select allEntries
     close conn
+    return $ map  _diffPackageName entries
+
+toAuditor :: Package -> Auditor
+toAuditor (Package pName pVersion dateFS dDep sUsed aStatus) =
+    Auditor
+        pName
+        pVersion
+        (pack $ show dateFS)
+        (pack $ show dDep)
+        (pack $ show sUsed)
+        (pack $ show aStatus)
