@@ -27,6 +27,7 @@ dependencies:
 - directory
 - hashable
 - mtl
+- optparse-applicative
 - parsec
 - process
 - sqlite-simple

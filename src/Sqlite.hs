@@ -22,8 +22,9 @@ import           Database.Beam          (Beamable, Columnar, Database,
                                          PrimaryKey (..), Table (..),
                                          TableEntity, all_, defaultDbSettings,
                                          insert, insertValues, liftIO,
-                                         runInsert, runSelectReturningList,
-                                         runSelectReturningOne, select)
+                                         runInsert, runSelectReturningOne,
+                                         select)
+import           Database.Beam.Query    (runSelectReturningList)
 import           Database.Beam.Sqlite
 import           Database.SQLite.Simple (close, open)
 import           Types                  (HashStatus (..), Package (..))
@@ -167,6 +168,20 @@ insertAddedPackage (Package pName pVersion dateFS dDep sUsed aStatus) = do
                      ]
     close conn
 
+updateAuditor :: Package -> IO ()
+updateAuditor (Package pName pVersion dateFS dDep sUsed aStatus) = do
+    conn <- open "auditor.db"
+    runBeamSqliteDebug putStrLn {- for debug output -} conn $ runInsert $
+        insert (_auditor  auditorDb) $
+        insertValues [ Auditor
+                           pName
+                           pVersion
+                           (pack $ show dateFS)
+                           (pack $ show dDep)
+                           (pack $ show sUsed)
+                           (pack $ show aStatus)
+                     ]
+    close conn
 
 -- | Query's all enteries in the Auditor table.
 queryAuditor :: IO ()

@@ -1,5 +1,6 @@
 module Types
        ( AnalysisStatus (..)
+       , Command (..)
        , DirectDependency
        , HashStatus (..)
        , IndirectDependency
@@ -37,6 +38,8 @@ data HashStatus = HashMatches
                 | HashDoesNotMatch
                 | HashNotFound
                 deriving Show
+
+newtype Command = Command String
 
 type Version = String
 type IndirectDependency = String

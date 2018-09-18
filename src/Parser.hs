@@ -1,7 +1,8 @@
 module Parser
-       ( digraphRemoval
+       ( allDependencies
+       , digraphRemoval
+       , getCommand
        , mainPackage
-       , allDependencies
        , packageName'
        , rankRemoval
        , shapeRemoval
@@ -10,14 +11,19 @@ module Parser
        , versions
        ) where
 
-import           Data.List   (concat, intercalate)
+import           Data.List           (concat, intercalate)
+import           Data.Semigroup      ((<>))
+import           Options.Applicative (Parser, help, long, metavar, strOption)
 import           Text.Parsec
+import           Types               (Command (..), PackageName, Version)
 
+-- | Returns name of the repo.
 packageName' :: Parsec String () String
 packageName' = do
     _ <- digraphRemoval
     concat <$> mainPackage <* styleRemoval
 
+-- | Returns all dependencies.
 allDependencies :: Parsec String () [(String,String)]
 allDependencies = do
     _ <- digraphRemoval
@@ -25,8 +31,8 @@ allDependencies = do
     _ <- (try shapeRemoval <|> rankRemoval) `sepEndBy` newline
     directDependancies `sepEndBy` newline
 
-
-versions :: Parsec String () [(String,String)]
+-- | Returns all package versions.
+versions :: Parsec String () [(PackageName, Version)]
 versions = dependencyVersion `sepEndBy` newline
 
 ------------------------------Helper Parsers-----------------------------------
@@ -116,3 +122,13 @@ dependencyVersion = do
     _ <- space
     version <- intercalate "." <$> many digit `sepBy` char '.'
     return (pName,version)
+
+------------------------------Optparse Parsers-----------------------------------
+
+getCommand :: Parser Command
+getCommand = Command
+    <$> strOption
+        ( long "audit"
+       <> metavar "TARGET"
+       <> help "Enter currentstate or updatecurrentstate"
+        )
