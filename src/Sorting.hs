@@ -4,11 +4,11 @@ module Sorting
        , allOriginalRepoVers
        , allUpdatedRepoDeps
        , allUpdatedRepoVers
-       , checkNewIndirectPackages
-       , checkNewPackages
-       , checkNewVersions
-       , checkRemovedPackages
+       , newIndirectDeps
+       , newVersions
+       , removedDeps
        , groupParseResults
+       , newDirDeps
        , originalDirectDeps
        , repoName
        , tuplesToList
@@ -62,8 +62,8 @@ allUpdatedRepoVers = do
 
 -- | Returns all new indirect dependencies. NB: The hierarchy is lost and
 -- packages in this list could be dependencies of each other.
-checkNewIndirectPackages :: IO [String]
-checkNewIndirectPackages = do
+newIndirectDeps :: IO [String]
+newIndirectDeps = do
     aOrgDeps <- allOriginalRepoDeps
     oDirDeps <- originalDirectDeps
     let originalIndirDeps =  (nub . tuplesToList $ groupParseResults aOrgDeps) \\ oDirDeps
@@ -73,35 +73,28 @@ checkNewIndirectPackages = do
     return $ updatedIndirDeps \\ originalIndirDeps
 
 -- | Checks for new direct dependencies added to the cabal file.
-checkNewPackages :: IO [(String, String)]
-checkNewPackages = do
+newDirDeps :: IO [String]
+newDirDeps = do
     rName <- repoName
-    oldDeps <- parse allDependencies "" <$> readFile "repoinfo/gendeps.dot" -- TODO: refactor
-    newDeps <- parse allDependencies "" <$> readFile "repoinfo/gendepsUpdated.dot"
-    case (newDeps, oldDeps) of
-        (Right nDeps, Right oDeps) -> return $ filter (\x -> rName == fst x) nDeps \\ oDeps
-        _                                       -> error "ParseFailure" --TODO: Handle error properly
+    oldDeps <- allOriginalRepoDeps
+    newDeps <- allUpdatedRepoDeps
+    return . map snd $ filter (\x -> rName == fst x) newDeps \\ oldDeps
 
 -- | Checks for new versions added to the cabal file.
-checkNewVersions :: IO [(String, String)]
-checkNewVersions = do
+newVersions :: IO [(String, String)]
+newVersions = do
     rName <- repoName
-    oldVersions <- parse versions "" <$> readFile "repoinfo/depsVers.txt" -- TODO: refactor
-    newVersions <- parse versions "" <$> readFile "repoinfo/depsVersUpdated.txt"
-    case (oldVersions, newVersions) of
-        (Right oVersions, Right nVersions) -> return $ filter (\x -> rName == fst x) nVersions \\ oVersions
-        _                                  -> error "ParseFailure" --TODO: Handle error properly
+    oldVers <- allOriginalRepoVers
+    newVers <- allUpdatedRepoVers
+    return $ filter (\x -> rName == fst x) newVers \\ oldVers
 
 -- | Checks for direct dependencies that were removed.
-checkRemovedPackages :: IO [(String, String)]
-checkRemovedPackages = do
+removedDeps :: IO [(String, String)]
+removedDeps = do
     rName <- repoName
-    oldDeps <- parse allDependencies "" <$> readFile "repoinfo/gendeps.dot" -- TODO: refactor
-    newDeps <- parse allDependencies "" <$> readFile "repoinfo/gendepsUpdated.dot"
-    case (newDeps, oldDeps) of
-        (Right nDeps, Right oDeps) ->  return $ filter (\x -> rName == fst x) (oDeps \\ nDeps)
-
-        _                          -> error "ParseFailure" --TODO: Handle error properly
+    oldDeps <- allOriginalRepoDeps
+    newDeps <- allUpdatedRepoDeps
+    return $ filter (\x -> rName == fst x) (oldDeps \\ newDeps)
 
 -- | Returns direct depedencies of the repo before any changes were
 -- made to the cabal file.

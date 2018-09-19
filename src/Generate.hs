@@ -3,6 +3,7 @@ module Generate
        , audit
        , createDB
        , createDeps
+       , insertUpdatedDependencies
        , originalDirectDeps
        , populateAuditorTable
        , update
@@ -16,11 +17,11 @@ import           Data.Text        (pack, unpack)
 import           Data.Time.Clock  (getCurrentTime)
 import           Sorting          (allOriginalRepoIndirDeps,
                                    allOriginalRepoVers, allUpdatedRepoVers,
-                                   checkNewIndirectPackages, checkNewPackages,
-                                   checkNewVersions, checkRemovedPackages,
-                                   originalDirectDeps)
+                                   newDirDeps, newIndirectDeps, newVersions,
+                                   originalDirectDeps, removedDeps)
 import           Sqlite           (checkHash, insertHash, insertPackageAuditor,
-                                   insertPackageDiff, queryAuditor, queryDiff)
+                                   insertPackageDiff, loadDiffIntoAuditor,
+                                   queryAuditor, queryDiff, queryDiff')
 import           System.Directory (getDirectoryContents)
 import           System.Process   (callCommand)
 import           Types            (Command (..), HashStatus (..), Package (..))
@@ -117,38 +118,29 @@ populateAuditorTable = do
 -- | Inserts new direct dependencies into the sqlite db.
 updateDiffTableDirectDeps :: IO ()
 updateDiffTableDirectDeps = do
-    dDeps <- checkNewPackages
+    dDeps <- newDirDeps
     depsInDiff <- queryDiff
-    -- TODO: Refactor using unless/when
-    if all (== False ) [x `elem` map unpack depsInDiff | x <- map snd dDeps]
-        then do
-            pVersions <- allUpdatedRepoVers
-            cTime <- getCurrentTime
-            mapM_ ((\x -> insertPackageDiff
-                (Package
-                    (pack x)
-                    (pack $ fromMaybe "No version Found" (lookup x pVersions))
-                    cTime
-                    True
-                    True
-                    [])) . snd) dDeps
-            else print "Already added"
+    if all (== False ) [x `elem` map unpack depsInDiff | x <- dDeps]
+        then insertUpdatedDependencies dDeps True True
+        else print "Already added new direct dependencies to the Diff table"
 
 -- | Inserts new indirect dependencies into the sqlite db.
 updateDiffTableIndirectDeps :: IO ()
 updateDiffTableIndirectDeps = do
-    newPs <- checkNewIndirectPackages
-    pVersions <- allUpdatedRepoVers
-    cTime <- getCurrentTime
-    mapM_ (\x -> insertPackageDiff
-        (Package
-            (pack x)
-            (pack $ fromMaybe "No version Found" (lookup x pVersions))
-            cTime
-            False
-            True
-            [])) newPs
+    newDeps <- newIndirectDeps
+    depsInDiff <- queryDiff
+    if all (== False ) [x `elem` map unpack depsInDiff | x <- newDeps]
+        then insertUpdatedDependencies newDeps False True
+        else print "Already added new indirect dependencies to the Diff table"
 
+updateDiffTableRemovedDeps :: IO ()
+updateDiffTableRemovedDeps = do
+    rDeps <- removedDeps
+    depsInDiff <- queryDiff
+    if all (== False ) [x `elem` map unpack depsInDiff | x <- map snd rDeps]
+        then insertRemovedDependencies (map snd rDeps) True False
+        -- TODO: Need to differentiate between direct and indirect removed deps
+        else print "Already added removed dependencies to the Diff table"
 ------------------------------Handler-----------------------------------
 
 commandHandler :: Command -> IO ()
@@ -164,11 +156,12 @@ audit = do
             HashMatches -> print "Hashes match, dependancy tree has not been changed."
             HashDoesNotMatch -> do
                 print "Hashes do not match, dependency tree has changed."
-                checkNewPackages >>= (\x -> print $ "New dependency(s): " ++ (show $ map snd x))
-                checkNewVersions >>= (\x -> print $ "New dependency versions: " ++ show x)
-                checkRemovedPackages >>= (\x -> print $ "Removed dependencies: " ++ show x)
+                newDirDeps >>= (\x -> print $ "New dependencies: " ++ show x)
+                newVersions >>= (\x -> print $ "New dependency versions: " ++ show x)
+                removedDeps >>= (\x -> print $ "Removed dependencies: " ++ show x)
                 updateDiffTableDirectDeps
                 updateDiffTableIndirectDeps
+                updateDiffTableRemovedDeps
 
                 -- TODO: Need to incorporate optparse-applicative to give the option to
                 -- load new/removed pkgs (and changed versions)
@@ -178,25 +171,40 @@ audit = do
                 populateAuditorTable
 
 update :: IO ()
-update = print "Should update Auditor table with what's in the Diff table"
+update = do
+    print "Inserting changes from Diff table into Auditor table"
+    loadDiffIntoAuditor
 
 ------------------------------Helpers-----------------------------------
 
--- | Insert dependencies into a db table.
+-- | Insert updated dependencies into a db table.
 -- depList    = list of dependencies you want to insert.
--- tableIns   = insertion function (changes depending on which table you
---              want to insert into)
 -- dirOrIndir = Bool signlaing whether or not the depdencies you are
 --              inserting are direct or indirect.
-insertDependencies :: [String] -> (Package -> IO ()) -> Bool -> IO ()
-insertDependencies depList tableIns dirOrIndir = do
+-- stillUsed  = Bool signaling whether or not the depencies you
+--              are inserting are direct or indirt.
+insertUpdatedDependencies :: [String] -> Bool -> Bool -> IO ()
+insertUpdatedDependencies depList dirOrIndir stillUsed = do
     cTime <- getCurrentTime
     pVersions <- allUpdatedRepoVers
-    mapM_ (\x -> tableIns
+    mapM_ (\x -> insertPackageDiff
         (Package
             (pack x)
             (pack $ fromMaybe "No version Found" (lookup x pVersions))
             cTime
             dirOrIndir
-            True
+            stillUsed
+            [])) depList
+
+insertRemovedDependencies :: [String] -> Bool -> Bool -> IO ()
+insertRemovedDependencies depList dirOrIndir stillUsed = do
+    cTime <- getCurrentTime
+    pVersions <- allOriginalRepoVers
+    mapM_ (\x -> insertPackageDiff
+        (Package
+            (pack x)
+            (pack $ fromMaybe "No version Found" (lookup x pVersions))
+            cTime
+            dirOrIndir
+            stillUsed
             [])) depList

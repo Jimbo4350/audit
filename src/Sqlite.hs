@@ -11,20 +11,24 @@ module Sqlite
        , insertHash
        , insertPackageAuditor
        , insertPackageDiff
+       , loadDiffIntoAuditor
        , queryAuditor
        , queryDiff
+       , queryDiff'
        , queryHash
        ) where
 
+import           Data.Coerce            (coerce)
 import           Data.Text              (Text, pack)
 import           Database.Beam          (Beamable, Columnar, Database,
                                          DatabaseSettings, Generic, Identity,
-                                         PrimaryKey (..), Table (..),
+                                         PrimaryKey (..), QExpr, Table (..),
                                          TableEntity, all_, defaultDbSettings,
-                                         insert, insertValues, liftIO,
-                                         runInsert, runSelectReturningOne,
-                                         select)
-import           Database.Beam.Query    (runSelectReturningList)
+                                         delete, insert, insertFrom,
+                                         insertValues, liftIO, references_,
+                                         runDelete, runInsert,
+                                         runSelectReturningOne, select)
+import           Database.Beam.Query    (runSelectReturningList, (==.))
 import           Database.Beam.Sqlite
 import           Database.SQLite.Simple (close, open)
 import           Types                  (HashStatus (..), Package (..))
@@ -99,6 +103,7 @@ instance Table DiffT where
     primaryKey = DiffPackageName . _diffPackageName
 
 instance Beamable (PrimaryKey DiffT)
+
 -- | Database
 
 data AuditorDb f = AuditorDb
@@ -131,7 +136,7 @@ checkHash testHash = do
 insertHash :: Int -> IO ()
 insertHash dotHash = do
     conn <- open "auditor.db"
-    runBeamSqliteDebug putStrLn {- for debug output -} conn $ runInsert $
+    runBeamSqlite conn $ runInsert $
         insert (_hash auditorDb) $
         insertValues [ Hash dotHash ]
     close conn
@@ -140,7 +145,7 @@ insertHash dotHash = do
 insertPackageAuditor :: Package -> IO ()
 insertPackageAuditor pkg = do
     conn <- open "auditor.db"
-    runBeamSqliteDebug putStrLn {- for debug output -} conn $ runInsert $
+    runBeamSqlite conn $ runInsert $
         insert (_auditor auditorDb) $
         insertValues [ toAuditor pkg ]
     close conn
@@ -161,20 +166,33 @@ insertPackageDiff (Package pName pVersion dateFS dDep sUsed aStatus) = do
                      ]
     close conn
 
-updateAuditor :: Package -> IO ()
-updateAuditor pkg = do
+loadDiffIntoAuditor ::  IO ()
+loadDiffIntoAuditor = do --print "WIP - load deps from Diff table to Auditor table"
     conn <- open "auditor.db"
-    runBeamSqliteDebug putStrLn {- for debug output -} conn $ runInsert $
-        insert (_auditor  auditorDb) $
-        insertValues [ toAuditor pkg ]
+   {- runBeamSqlite conn $ runDelete $ do
+        let test = ("test" :: Text)
+        delete (_auditor auditorDb)
+            (\c -> _auditorPackageName c ==. (coerce test :: QExpr))-}
+
+    runBeamSqlite conn $ runInsert $
+        insert (_auditor auditorDb) $
+            insertFrom $ do
+                allEntries <- all_ (_diff auditorDb)
+                pure (Auditor (_diffPackageName allEntries)
+                              (_diffPackageVersion allEntries)
+                              (_diffDateFirstSeen allEntries)
+                              (_diffDirectDep allEntries)
+                              (_diffStillUsed allEntries)
+                              (_diffAnalysisStatus allEntries))
     close conn
 
--- | Returns all enteries in the Auditor table.
+
+-- | Returns all entries in the Auditor table.
 queryAuditor :: IO [Auditor]
 queryAuditor  = do
     conn <- open "auditor.db"
     let allEntries = all_ (_auditor auditorDb)
-    entries <- runBeamSqliteDebug putStrLn conn $
+    entries <- runBeamSqlite conn $
         runSelectReturningList $ select allEntries
     close conn
     return entries
@@ -184,19 +202,29 @@ queryHash :: IO (Maybe Hash)
 queryHash = do
     conn <- open "auditor.db"
     let allEntries = all_ (_hash auditorDb)
-    entry <- runBeamSqliteDebug putStrLn conn $
+    entry <- runBeamSqlite conn $
              runSelectReturningOne $ select allEntries
     close conn
     return entry
 
-queryDiff:: IO [Text]
+queryDiff :: IO [Text]
 queryDiff  = do
     conn <- open "auditor.db"
     let allEntries = all_ (_diff auditorDb)
-    entries <- runBeamSqliteDebug putStrLn conn $
+    entries <- runBeamSqlite conn $
                runSelectReturningList $ select allEntries
     close conn
     return $ map  _diffPackageName entries
+
+queryDiff' :: IO [Diff]
+queryDiff'  = do
+    conn <- open "auditor.db"
+    let allEntries = all_ (_diff auditorDb)
+    entries <- runBeamSqlite conn $
+               runSelectReturningList $ select allEntries
+    close conn
+    return entries
+
 
 toAuditor :: Package -> Auditor
 toAuditor (Package pName pVersion dateFS dDep sUsed aStatus) =
@@ -207,3 +235,4 @@ toAuditor (Package pName pVersion dateFS dDep sUsed aStatus) =
         (pack $ show dDep)
         (pack $ show sUsed)
         (pack $ show aStatus)
+
