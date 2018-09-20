@@ -19,9 +19,10 @@ import           Sorting          (allOriginalRepoIndirDeps,
                                    allOriginalRepoVers, allUpdatedRepoVers,
                                    newDirDeps, newIndirectDeps, newVersions,
                                    originalDirectDeps, removedDeps)
-import           Sqlite           (checkHash, insertHash, insertPackageAuditor,
+import           Sqlite           (checkHash, deleteDepsDiff, deleteHash,
+                                   insertHash, insertPackageAuditor,
                                    insertPackageDiff, loadDiffIntoAuditor,
-                                   queryAuditor, queryDiff, queryDiff')
+                                   queryDiff)
 import           System.Directory (getDirectoryContents)
 import           System.Process   (callCommand)
 import           Types            (Command (..), HashStatus (..), Package (..))
@@ -66,7 +67,6 @@ createDeps :: IO ()
 createDeps = do
     callCommand "stack dot --external > repoinfo/gendeps.dot"
     callCommand "stack ls dependencies > repoinfo/depsVers.txt"
-    print "I'm here"
 
 -- | Writes direct dependencies to the db.
 insDirDepsAuditor :: IO ()
@@ -74,7 +74,6 @@ insDirDepsAuditor = do
     pVersions <- allOriginalRepoVers
     dDeps <- originalDirectDeps
     cTime <- getCurrentTime
-    --insertDependencies dDeps insertPackageAuditor True
     mapM_ (\x -> insertPackageAuditor
                      (Package
                          (pack x)
@@ -141,12 +140,13 @@ updateDiffTableRemovedDeps = do
         then insertRemovedDependencies (map snd rDeps) True False
         -- TODO: Need to differentiate between direct and indirect removed deps
         else print "Already added removed dependencies to the Diff table"
+
 ------------------------------Handler-----------------------------------
 
 commandHandler :: Command -> IO ()
 commandHandler (Command cmd)
     | cmd == "audit" = audit
-    | cmd == "insert" = update
+    | cmd == "load" = update
     | otherwise = print "Invalid command!"
 
 audit :: IO ()
@@ -162,9 +162,6 @@ audit = do
                 updateDiffTableDirectDeps
                 updateDiffTableIndirectDeps
                 updateDiffTableRemovedDeps
-
-                -- TODO: Need to incorporate optparse-applicative to give the option to
-                -- load new/removed pkgs (and changed versions)
             HashNotFound -> do
                 print "Hash not found, generating db."
                 createDeps
@@ -172,8 +169,21 @@ audit = do
 
 update :: IO ()
 update = do
-    print "Inserting changes from Diff table into Auditor table"
+    print "Inserting changes from Diff table into Auditor table.."
     loadDiffIntoAuditor
+    print "Overwriting original repo dependency tree & clearing Diff table"
+    callCommand "stack dot --external > repoinfo/gendeps.dot"
+    -- This will become the new hash
+    contents <- (++) <$> readFile "repoinfo/gendepsUpdated.dot" <*> readFile "repoinfo/depsVersUpdated.txt"
+    deleteHash
+    -- Update hash in hash table
+    insertHash $ hash contents
+    -- Delete the new dependencies (that was just added to the auditor table)
+    -- in the Diff table
+    deleteDepsDiff
+    callCommand "rm repoinfo/depsVersUpdated.txt"
+    callCommand "rm repoinfo/gendepsUpdated.dot"
+
 
 ------------------------------Helpers-----------------------------------
 
@@ -184,7 +194,7 @@ update = do
 -- stillUsed  = Bool signaling whether or not the depencies you
 --              are inserting are direct or indirt.
 insertUpdatedDependencies :: [String] -> Bool -> Bool -> IO ()
-insertUpdatedDependencies depList dirOrIndir stillUsed = do
+insertUpdatedDependencies depList dirOrIndir inYaml = do
     cTime <- getCurrentTime
     pVersions <- allUpdatedRepoVers
     mapM_ (\x -> insertPackageDiff
@@ -193,11 +203,11 @@ insertUpdatedDependencies depList dirOrIndir stillUsed = do
             (pack $ fromMaybe "No version Found" (lookup x pVersions))
             cTime
             dirOrIndir
-            stillUsed
+            inYaml
             [])) depList
 
 insertRemovedDependencies :: [String] -> Bool -> Bool -> IO ()
-insertRemovedDependencies depList dirOrIndir stillUsed = do
+insertRemovedDependencies depList dirOrIndir inYaml = do
     cTime <- getCurrentTime
     pVersions <- allOriginalRepoVers
     mapM_ (\x -> insertPackageDiff
@@ -206,5 +216,5 @@ insertRemovedDependencies depList dirOrIndir stillUsed = do
             (pack $ fromMaybe "No version Found" (lookup x pVersions))
             cTime
             dirOrIndir
-            stillUsed
+            inYaml
             [])) depList

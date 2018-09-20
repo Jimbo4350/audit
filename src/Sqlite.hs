@@ -1,13 +1,14 @@
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE StandaloneDeriving    #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeSynonymInstances  #-}
 
 module Sqlite
        ( checkHash
+       , deleteDepsDiff
+       , deleteHash
        , insertHash
        , insertPackageAuditor
        , insertPackageDiff
@@ -18,17 +19,18 @@ module Sqlite
        , queryHash
        ) where
 
-import           Data.Coerce            (coerce)
+import           Data.List              (all)
+import           Data.Maybe             (isNothing)
 import           Data.Text              (Text, pack)
 import           Database.Beam          (Beamable, Columnar, Database,
                                          DatabaseSettings, Generic, Identity,
-                                         PrimaryKey (..), QExpr, Table (..),
+                                         PrimaryKey (..), Table (..),
                                          TableEntity, all_, defaultDbSettings,
                                          delete, insert, insertFrom,
-                                         insertValues, liftIO, references_,
-                                         runDelete, runInsert,
-                                         runSelectReturningOne, select)
-import           Database.Beam.Query    (runSelectReturningList, (==.))
+                                         insertValues, liftIO, runDelete,
+                                         runInsert, select)
+import           Database.Beam.Query    (lookup_, runSelectReturningList,
+                                         runSelectReturningOne, val_, (==.))
 import           Database.Beam.Sqlite
 import           Database.SQLite.Simple (close, open)
 import           Types                  (HashStatus (..), Package (..))
@@ -131,6 +133,29 @@ checkHash testHash = do
               else liftIO $ return HashDoesNotMatch
       Nothing -> liftIO $ return HashNotFound
 
+-- | Delete the dependencies in the diff table.
+deleteDepsDiff :: IO ()
+deleteDepsDiff = do
+    conn <- open "auditor.db"
+    deps <- queryDiff
+    mapM_ (\x -> runBeamSqlite conn $ runDelete $
+        delete (_diff auditorDb)
+            (\c -> _diffPackageName c ==. val_ x)) deps
+    close conn
+
+-- | Takes a hash and inserts it into the Hash table.
+deleteHash :: IO ()
+deleteHash = do
+    conn <- open "auditor.db"
+    currentHash <- queryHash
+    case currentHash of
+        Just dbH ->  do
+            let dbHashInt = _hashDotHash dbH
+            runBeamSqlite conn $ runDelete $
+                delete (_hash auditorDb)
+                    (\table -> _hashDotHash table ==. val_ dbHashInt)
+        Nothing -> print "Hash not found in database"
+    close conn
 
 -- | Takes a hash and inserts it into the Hash table.
 insertHash :: Int -> IO ()
@@ -166,26 +191,41 @@ insertPackageDiff (Package pName pVersion dateFS dDep sUsed aStatus) = do
                      ]
     close conn
 
-loadDiffIntoAuditor ::  IO ()
-loadDiffIntoAuditor = do --print "WIP - load deps from Diff table to Auditor table"
+loadDiffIntoAuditor :: IO ()
+loadDiffIntoAuditor = do
     conn <- open "auditor.db"
-   {- runBeamSqlite conn $ runDelete $ do
-        let test = ("test" :: Text)
-        delete (_auditor auditorDb)
-            (\c -> _auditorPackageName c ==. (coerce test :: QExpr))-}
+    updatedDeps <- queryDiff
+    -- Check to see if the dependency in Diff exists in Auditor
+    -- If it does, indicates either a version change or dependency removal
+    -- Returns a list of Maybes
+    existingDeps <- runBeamSqlite conn $ do
+                        let primaryKeyLookup = lookup_ (_auditor auditorDb)
+                        let sqlQuery = map (primaryKeyLookup . AuditorPackageName) updatedDeps
+                        mapM runSelectReturningOne sqlQuery
+    case all isNothing existingDeps of
+        -- Inserts all the dependencies in the Diff table into the Auditor table
+        True -> runBeamSqlite conn $ runInsert $
+                    insert (_auditor auditorDb) $
+                        insertFrom $ do
+                            allEntries <- all_ (_diff auditorDb)
+                            pure (Auditor (_diffPackageName allEntries)
+                                          (_diffPackageVersion allEntries)
+                                          (_diffDateFirstSeen allEntries)
+                                          (_diffDirectDep allEntries)
+                                          (_diffStillUsed allEntries)
+                                          (_diffAnalysisStatus allEntries))
+        _ -> print "Dependency exists in auditor table. Need to handle this case"
 
-    runBeamSqlite conn $ runInsert $
-        insert (_auditor auditorDb) $
-            insertFrom $ do
-                allEntries <- all_ (_diff auditorDb)
-                pure (Auditor (_diffPackageName allEntries)
-                              (_diffPackageVersion allEntries)
-                              (_diffDateFirstSeen allEntries)
-                              (_diffDirectDep allEntries)
-                              (_diffStillUsed allEntries)
-                              (_diffAnalysisStatus allEntries))
+    -- Deletes existing entries in Auditor table so we can insert the update deps
+    -- from the Diff table.
+    {-
+    mapM_ (\x -> runBeamSqlite conn $ runDelete $
+                     delete (_auditor auditorDb)
+                         (\c -> _auditorPackageName c ==. val_ x)) updatedDeps
+                         -}
+    -- Inserts the updated dependencies from the Diff table to the Auditor table
+
     close conn
-
 
 -- | Returns all entries in the Auditor table.
 queryAuditor :: IO [Auditor]
