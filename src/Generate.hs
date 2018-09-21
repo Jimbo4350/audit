@@ -153,7 +153,7 @@ audit :: IO ()
 audit = do
         hashStat <- createDB
         case hashStat of
-            HashMatches -> print "Hashes match, dependancy tree has not been changed."
+            HashMatches -> print "Hashes match, dependency tree has not been changed."
             HashDoesNotMatch -> do
                 print "Hashes do not match, dependency tree has changed."
                 newDirDeps >>= (\x -> print $ "New dependencies: " ++ show x)
@@ -174,7 +174,8 @@ update = do
     print "Overwriting original repo dependency tree & clearing Diff table"
     callCommand "stack dot --external > repoinfo/gendeps.dot"
     -- This will become the new hash
-    contents <- (++) <$> readFile "repoinfo/gendepsUpdated.dot" <*> readFile "repoinfo/depsVersUpdated.txt"
+    contents <- (++) <$> readFile "repoinfo/gendepsUpdated.dot"
+                     <*> readFile "repoinfo/depsVersUpdated.txt"
     deleteHash
     -- Update hash in hash table
     insertHash $ hash contents
@@ -209,10 +210,12 @@ insertUpdatedDependencies depList dirOrIndir inYaml = do
 insertRemovedDependencies :: [String] -> Bool -> Bool -> IO ()
 insertRemovedDependencies depList dirOrIndir inYaml = do
     cTime <- getCurrentTime
-    pVersions <- allOriginalRepoVers
+    pVersions <- allUpdatedRepoVers
     mapM_ (\x -> insertPackageDiff
         (Package
             (pack x)
+            -- TODO: Once you build you lost the version info
+            -- you need to query the Auditor database
             (pack $ fromMaybe "No version Found" (lookup x pVersions))
             cTime
             dirOrIndir

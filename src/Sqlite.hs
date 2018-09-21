@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE StandaloneDeriving    #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeSynonymInstances  #-}
@@ -19,8 +20,8 @@ module Sqlite
        , queryHash
        ) where
 
-import           Data.List              (all)
-import           Data.Maybe             (isNothing)
+import           Data.List              (all, find)
+import           Data.Maybe             (fromJust, isNothing)
 import           Data.Text              (Text, pack)
 import           Database.Beam          (Beamable, Columnar, Database,
                                          DatabaseSettings, Generic, Identity,
@@ -133,6 +134,16 @@ checkHash testHash = do
               else liftIO $ return HashDoesNotMatch
       Nothing -> liftIO $ return HashNotFound
 
+-- | Compare an entry from the Diff table and Auditor table
+-- TODO: Matching on a string isn't particular nice....fix this.
+compareDiffAuditor :: Diff -> Auditor -> Maybe Auditor
+compareDiffAuditor (Diff _ dVersion _ _ diffStUsed _)
+                   (Auditor aPkgName aVersion aDateFSeen aDirDep aStUsed aStat) =
+    case (dVersion == aVersion, diffStUsed, aStUsed) of
+        (False, "True", "True") -> Just (Auditor aPkgName dVersion aDateFSeen aDirDep aStUsed aStat)
+        (True, "False", "True") -> Just (Auditor aPkgName aVersion aDateFSeen aDirDep "False" aStat)
+        _                       -> Nothing
+
 -- | Delete the dependencies in the diff table.
 deleteDepsDiff :: IO ()
 deleteDepsDiff = do
@@ -194,16 +205,22 @@ insertPackageDiff (Package pName pVersion dateFS dDep sUsed aStatus) = do
 loadDiffIntoAuditor :: IO ()
 loadDiffIntoAuditor = do
     conn <- open "auditor.db"
-    updatedDeps <- queryDiff
+    diffDeps <-  queryDiff
     -- Check to see if the dependency in Diff exists in Auditor
     -- If it does, indicates either a version change or dependency removal
     -- Returns a list of Maybes
+    {-
     existingDeps <- runBeamSqlite conn $ do
                         let primaryKeyLookup = lookup_ (_auditor auditorDb)
-                        let sqlQuery = map (primaryKeyLookup . AuditorPackageName) updatedDeps
+                        let sqlQuery = map (primaryKeyLookup . AuditorPackageName) diffDeps
                         mapM runSelectReturningOne sqlQuery
+    -}
+    existingDeps <- mapM (\x -> runBeamSqlite conn $ do
+                                let primaryKeyLookup = lookup_ (_auditor auditorDb)
+                                let sqlQuery = primaryKeyLookup $ AuditorPackageName x
+                                runSelectReturningOne sqlQuery) diffDeps
     case all isNothing existingDeps of
-        -- Inserts all the dependencies in the Diff table into the Auditor table
+        -- Inserts all the dependencies from the Diff table into the Auditor table
         True -> runBeamSqlite conn $ runInsert $
                     insert (_auditor auditorDb) $
                         insertFrom $ do
@@ -214,18 +231,69 @@ loadDiffIntoAuditor = do
                                           (_diffDirectDep allEntries)
                                           (_diffStillUsed allEntries)
                                           (_diffAnalysisStatus allEntries))
-        _ -> print "Dependency exists in auditor table. Need to handle this case"
+        -- There are deps in the Diff table that exists in the Auditor table
+        _ -> updateOrModify diffDeps
 
-    -- Deletes existing entries in Auditor table so we can insert the update deps
-    -- from the Diff table.
+
+    -- TODO: New plan, query the Auditor db with each of the "diffDeps". If it exists,
+    -- pull all the fields and see what has changed. You need to copy the timestamp to Diff
+    -- entry. Delete the existing entry in  Auditor and insert the new updated Diff entry
     {-
     mapM_ (\x -> runBeamSqlite conn $ runDelete $
                      delete (_auditor auditorDb)
                          (\c -> _auditorPackageName c ==. val_ x)) updatedDeps
                          -}
     -- Inserts the updated dependencies from the Diff table to the Auditor table
-
     close conn
+
+-- | Add a new dependency to the Auditor table or modify an
+-- existing dependency in the Auditor table
+updateOrModify :: [Text]-> IO ()
+updateOrModify [] = pure ()
+updateOrModify (x:xs) = do
+    conn <- open "auditor.db"
+    -- Check to see if the dependency in Diff exists in Auditor
+    -- If it does, indicates either a version change or dependency removal
+    audQresult <- runBeamSqlite conn $ do
+                  let primaryKeyLookup = lookup_ (_auditor auditorDb)
+                  let sqlQuery = primaryKeyLookup $ AuditorPackageName x
+                  runSelectReturningOne sqlQuery
+    case audQresult of
+        -- Either the version has changed or the dependency has been removed
+        -- from the repo.
+        Just audDep -> do
+            -- Get dependency from Diff table
+            diffQresult <- runBeamSqlite conn $ do
+                           let primaryKeyLookup = lookup_ (_diff auditorDb)
+                           let sqlQuery = primaryKeyLookup $ DiffPackageName x
+                           runSelectReturningOne sqlQuery
+            let diffDep = fromJust diffQresult
+            -- Compare Diff and Audit query; return the updated dependency information
+            case compareDiffAuditor diffDep audDep of
+                -- TODO: No version found is why this case is being matched
+                Nothing -> error "Error in compareDiffAuditor: This should not happen"
+                Just depToIns -> do
+                    runBeamSqlite conn $ runInsert $
+                        insert (_auditor auditorDb) $
+                        insertValues [ depToIns ]
+                    updateOrModify xs
+        -- New dependency to add to Auditor table.
+        Nothing -> do
+            diffList <- queryDiff'
+            runBeamSqlite conn $ runInsert $
+                insert (_auditor auditorDb) $
+                    insertFrom $ do
+                        -- TODO: Handle this fromJust properly
+                        let matchedDep = fromJust $ find (\diff -> _diffPackageName diff == x ) diffList
+                        pure (Auditor (val_ $ _diffPackageName matchedDep)
+                                      (val_ $ _diffPackageVersion matchedDep)
+                                      (val_ $ _diffDateFirstSeen matchedDep)
+                                      (val_ $ _diffDirectDep matchedDep)
+                                      (val_ $ _diffStillUsed matchedDep)
+                                      (val_ $ _diffAnalysisStatus matchedDep))
+            updateOrModify xs
+
+
 
 -- | Returns all entries in the Auditor table.
 queryAuditor :: IO [Auditor]
