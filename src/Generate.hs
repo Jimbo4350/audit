@@ -22,7 +22,7 @@ import           Sorting          (allOriginalRepoIndirDeps,
 import           Sqlite           (checkHash, deleteDepsDiff, deleteHash,
                                    insertHash, insertPackageAuditor,
                                    insertPackageDiff, loadDiffIntoAuditor,
-                                   queryDiff)
+                                   queryDiff, insertRemovedDependencies)
 import           System.Directory (getDirectoryContents)
 import           System.Process   (callCommand)
 import           Types            (Command (..), HashStatus (..), Package (..))
@@ -135,9 +135,10 @@ updateDiffTableIndirectDeps = do
 updateDiffTableRemovedDeps :: IO ()
 updateDiffTableRemovedDeps = do
     rDeps <- removedDeps
+    let rDepText = map (pack . snd) rDeps -- TODO: Neaten this up
     depsInDiff <- queryDiff
     if all (== False ) [x `elem` map unpack depsInDiff | x <- map snd rDeps]
-        then insertRemovedDependencies (map snd rDeps) True False
+        then insertRemovedDependencies rDepText True False
         -- TODO: Need to differentiate between direct and indirect removed deps
         else print "Already added removed dependencies to the Diff table"
 
@@ -207,17 +208,4 @@ insertUpdatedDependencies depList dirOrIndir inYaml = do
             inYaml
             [])) depList
 
-insertRemovedDependencies :: [String] -> Bool -> Bool -> IO ()
-insertRemovedDependencies depList dirOrIndir inYaml = do
-    cTime <- getCurrentTime
-    pVersions <- allUpdatedRepoVers
-    mapM_ (\x -> insertPackageDiff
-        (Package
-            (pack x)
-            -- TODO: Once you build you lost the version info
-            -- you need to query the Auditor database
-            (pack $ fromMaybe "No version Found" (lookup x pVersions))
-            cTime
-            dirOrIndir
-            inYaml
-            [])) depList
+

@@ -13,6 +13,7 @@ module Sqlite
        , insertHash
        , insertPackageAuditor
        , insertPackageDiff
+       , insertRemovedDependencies
        , loadDiffIntoAuditor
        , queryAuditor
        , queryDiff
@@ -23,6 +24,7 @@ module Sqlite
 import           Data.List              (all, find)
 import           Data.Maybe             (fromJust, isNothing)
 import           Data.Text              (Text, pack)
+import           Data.Time.Clock        (getCurrentTime)
 import           Database.Beam          (Beamable, Columnar, Database,
                                          DatabaseSettings, Generic, Identity,
                                          PrimaryKey (..), Table (..),
@@ -201,6 +203,32 @@ insertPackageDiff (Package pName pVersion dateFS dDep sUsed aStatus) = do
                            (pack $ show aStatus)
                      ]
     close conn
+
+insertRemovedDependencies :: [Text] -> Bool -> Bool -> IO ()
+insertRemovedDependencies depList dirOrIndir inYaml =
+    mapM_ (\x -> insGetVers x dirOrIndir inYaml) depList
+  where
+    -- Updates diff with removed dep. Queries auditor because
+    -- after the dep is removed from the repository,
+    -- `stack ls dependencies` can no longer get the version.
+    insGetVers :: Text -> Bool -> Bool -> IO ()
+    insGetVers dep dirOrIndir inYaml = do
+        conn <- open "auditor.db"
+        audQresult <- runBeamSqlite conn $ do
+            let primaryKeyLookup = lookup_ (_auditor auditorDb)
+            let sqlQuery = primaryKeyLookup $ AuditorPackageName dep
+            runSelectReturningOne sqlQuery
+        cTime <- getCurrentTime
+        insertPackageDiff (Package
+            dep
+            -- TODO: Once you build you lost the version info
+            -- you need to query the Auditor database
+            (_auditorPackageVersion $ fromJust audQresult)
+            cTime
+            dirOrIndir
+            inYaml
+            [])
+        close conn
 
 loadDiffIntoAuditor :: IO ()
 loadDiffIntoAuditor = do
