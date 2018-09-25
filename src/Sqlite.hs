@@ -221,9 +221,10 @@ insertRemovedDependencies depList dirOrIndir inYaml =
         cTime <- getCurrentTime
         insertPackageDiff (Package
             dep
-            -- TODO: Once you build you lost the version info
-            -- you need to query the Auditor database
             (_auditorPackageVersion $ fromJust audQresult)
+            -- TODO: You are generating a new time here
+            -- need to clarify if you should take the old time
+            -- or generate a new time.
             cTime
             dirOrIndir
             inYaml
@@ -286,6 +287,7 @@ updateOrModify (x:xs) = do
                   let primaryKeyLookup = lookup_ (_auditor auditorDb)
                   let sqlQuery = primaryKeyLookup $ AuditorPackageName x
                   runSelectReturningOne sqlQuery
+    print audQresult
     case audQresult of
         -- Either the version has changed or the dependency has been removed
         -- from the repo.
@@ -301,6 +303,9 @@ updateOrModify (x:xs) = do
                 -- TODO: No version found is why this case is being matched
                 Nothing -> error "Error in compareDiffAuditor: This should not happen"
                 Just depToIns -> do
+                    runBeamSqlite conn $ runDelete $
+                        delete (_auditor auditorDb)
+                            (\table -> _auditorPackageName table ==. (val_ $ _diffPackageName diffDep))
                     runBeamSqlite conn $ runInsert $
                         insert (_auditor auditorDb) $
                         insertValues [ depToIns ]
