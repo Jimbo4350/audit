@@ -4,12 +4,12 @@ module Sorting
        , allOriginalRepoVers
        , allUpdatedRepoDeps
        , allUpdatedRepoVers
+       , groupParseResults
        , newIndirectDeps
        , newVersions
-       , removedDeps
-       , groupParseResults
        , newDirDeps
        , originalDirectDeps
+       , removedDeps
        , repoName
        , tuplesToList
        ) where
@@ -89,12 +89,13 @@ newVersions = do
     return $ filter (\x -> rName == fst x) newVers \\ oldVers
 
 -- | Checks for direct dependencies that were removed.
-removedDeps :: IO [(String, String)]
+--removedDeps :: IO [(String, String)]
+removedDeps :: IO [String]
 removedDeps = do
     rName <- repoName
     oldDeps <- allOriginalRepoDeps
     newDeps <- allUpdatedRepoDeps
-    return $ filter (\x -> rName == fst x) (oldDeps \\ newDeps)
+    return . map snd $ filter (\x -> rName == fst x) (oldDeps \\ newDeps)
 
 -- | Returns direct depedencies of the repo before any changes were
 -- made to the cabal file.

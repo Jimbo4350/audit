@@ -36,10 +36,10 @@ dependencies:
 library:
   source-dirs: src
   exposed-modules:
+  - Database
   - Generate
   - Parser
   - Sorting
-  - Sqlite
   - Types
   ghc-options: -Wall
 

@@ -57,7 +57,7 @@ mainPackage =
     between
         (char '"')
         (char '"')
-        (many alphaNum `sepBy` char ('-')) <* many space
+        (many alphaNum `sepBy` char '-') <* many space
 
 -- | Removes "[style=dashed]; "
 styleRemoval :: Parsec String () ()
