@@ -24,28 +24,41 @@ module Database
        , updateDiffTableRemovedDeps
        ) where
 
-import           Data.Hashable          (hash)
-import           Data.List              (all, find)
-import           Data.Maybe             (fromJust, fromMaybe, isNothing)
-import           Data.Text              (Text, pack, unpack)
-import           Data.Time.Clock        (getCurrentTime)
-import           Database.Beam          (Beamable, Columnar, Database,
-                                         DatabaseSettings, Generic, Identity,
-                                         PrimaryKey (..), Table (..),
-                                         TableEntity, all_, defaultDbSettings,
-                                         delete, insert, insertFrom,
-                                         insertValues, liftIO, runDelete,
-                                         runInsert, select)
-import           Database.Beam.Query    (lookup_, runSelectReturningList,
-                                         runSelectReturningOne, val_, (==.))
+import           Data.Hashable                              (hash)
+import           Data.List                                  (all, find)
+import           Data.Maybe                                 (fromJust,
+                                                             fromMaybe,
+                                                             isNothing)
+import           Data.Text                                  (Text, pack, unpack)
+import           Data.Time.Clock                            (getCurrentTime)
+import           Database.Beam                              (Beamable, Columnar,
+                                                             Database,
+                                                             DatabaseSettings,
+                                                             Generic, Identity,
+                                                             PrimaryKey (..),
+                                                             Table (..),
+                                                             TableEntity, all_,
+                                                             defaultDbSettings,
+                                                             delete, insert,
+                                                             insertFrom,
+                                                             insertValues,
+                                                             liftIO, runDelete,
+                                                             runInsert, select)
+import           Database.Beam.Query                        (lookup_, runSelectReturningList,
+                                                             runSelectReturningOne,
+                                                             val_, (==.))
 import           Database.Beam.Sqlite
-import           Database.SQLite.Simple (close, open)
-import           Sorting                (allOriginalRepoIndirDeps,
-                                         allOriginalRepoVers,
-                                         allUpdatedRepoVers, newDirDeps,
-                                         newIndirectDeps, originalDirectDeps,
-                                         removedDeps)
-import           Types                  (HashStatus (..), Package (..))
+import           Database.SQLite.Simple                     (close, open)
+import           Database.SQLite.Simple.Time.Implementation (parseUTCTime)
+import           Sorting                                    (allOriginalRepoIndirDeps,
+                                                             allOriginalRepoVers,
+                                                             allUpdatedRepoVers,
+                                                             newDirDeps,
+                                                             newIndirectDeps,
+                                                             originalDirectDeps,
+                                                             removedDeps)
+import           Types                                      (HashStatus (..),
+                                                             Package (..))
 
 -- | Auditor Table. Stores the current direct, indirect and
 -- removed dependencies.
@@ -265,19 +278,21 @@ insertRemovedDependencies (x:xs) dirOrIndir inYaml = do
         let primaryKeyLookup = lookup_ (_auditor auditorDb)
         let sqlQuery = primaryKeyLookup $ AuditorPackageName x
         runSelectReturningOne sqlQuery
-    cTime <- getCurrentTime
-    insertPackageDiff (Package
-        x
-        (_auditorPackageVersion $ fromJust audQresult)
-        -- TODO: You are generating a new time here
-        -- need to clarify if you should take the old time
-        -- or generate a new time.
-        cTime
-        dirOrIndir
-        inYaml
-        [])
-    close conn
-    insertRemovedDependencies xs dirOrIndir inYaml
+    -- Gets original time the package was first added.
+    let dFSeen = _auditorDateFirstSeen $ fromJust audQresult
+    case parseUTCTime dFSeen of
+        Right utcTime -> do
+                           insertPackageDiff (Package
+                               x
+                               (_auditorPackageVersion $ fromJust audQresult)
+                               utcTime
+                               dirOrIndir
+                               inYaml
+                               [])
+                           close conn
+                           insertRemovedDependencies xs dirOrIndir inYaml
+        Left err -> print err -- TODO: Figure out why this case gets matched. Responsible for "endOfInput"
+
 
 -- | Insert updated dependencies into a db table.
 -- depList    = list of dependencies you want to insert.
