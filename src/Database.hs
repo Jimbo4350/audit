@@ -191,8 +191,8 @@ deleteHash = do
 initialAuditorTable :: IO ()
 initialAuditorTable = do
     insertOriginalDepsAuditor
-    (++) <$> readFile "repoinfo/gendeps.dot"
-         <*> readFile "repoinfo/depsVers.txt" >>= insertHash . hash
+    (++) <$> readFile "repoinfo/currentDepTree.dot"
+         <*> readFile "repoinfo/currentDepTreeVersions.txt" >>= insertHash . hash
 
 -- | Inserts original direct & indirect dependencies into auditor table.
 insertOriginalDepsAuditor :: IO ()

@@ -30,16 +30,16 @@ checkDB = do
         then do
              print "auditor.db present"
              print "Generating new dot file and checking hash"
-             callCommand "stack dot --external > repoinfo/gendepsUpdated.dot"
-             callCommand "stack ls dependencies > repoinfo/depsVersUpdated.txt"
-             contents <- (++) <$> readFile "repoinfo/gendepsUpdated.dot" <*> readFile "repoinfo/depsVersUpdated.txt"
+             callCommand "stack dot --external > repoinfo/updatedDepTree.dot"
+             callCommand "stack ls dependencies > repoinfo/updatedDepTreeVersions.txt"
+             contents <- (++) <$> readFile "repoinfo/updatedDepTree.dot" <*> readFile "repoinfo/updatedDepTreeVersions.txt"
              checkHash $ hash contents
         else return HashNotFound
 
 generateInitialDepFiles :: IO ()
 generateInitialDepFiles = do
-    callCommand "stack dot --external > repoinfo/gendeps.dot"
-    callCommand "stack ls dependencies > repoinfo/depsVers.txt"
+    callCommand "stack dot --external > repoinfo/currentDepTree.dot"
+    callCommand "stack ls dependencies > repoinfo/currentDepTreeVersions.txt"
 
 initializeDB :: IO ()
 initializeDB =
@@ -101,16 +101,16 @@ update = do
                   loadDiffIntoAuditor
                   print "Overwriting original repository dependency \
                         \tree & clearing Diff table"
-                  callCommand "stack dot --external > repoinfo/gendeps.dot"
+                  callCommand "stack dot --external > repoinfo/currentDepTree.dot"
                   print "Deleting old hash."
                   deleteHash
                   -- `contents` will become the new hash
-                  contents <- (++) <$> readFile "repoinfo/gendepsUpdated.dot"
-                                   <*> readFile "repoinfo/depsVersUpdated.txt"
+                  contents <- (++) <$> readFile "repoinfo/updatedDepTree.dot"
+                                   <*> readFile "repoinfo/updatedDepTreeVersions.txt"
                   -- Update hash in hash table
                   insertHash $ hash contents
                   -- Delete the new dependencies (that was just added to the auditor table)
                   -- in the Diff table
                   clearDiffTable
-                  callCommand "rm repoinfo/depsVersUpdated.txt"
-                  callCommand "rm repoinfo/gendepsUpdated.dot"
+                  callCommand "rm repoinfo/updatedDepTreeVersions.txt"
+                  callCommand "rm repoinfo/updatedDepTree.dot"

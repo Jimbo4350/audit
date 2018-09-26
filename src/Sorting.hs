@@ -25,14 +25,14 @@ import           Types       (DirectDependency, PackageName, Version)
 -- the tuple is the direct dependency of the `PackageName` within that tuple.
 allOriginalRepoDeps :: IO [(PackageName , DirectDependency)]
 allOriginalRepoDeps = do
-    pDeps <- parse allDependencies "" <$> readFile "repoinfo/gendeps.dot"
+    pDeps <- parse allDependencies "" <$> readFile "repoinfo/currentDepTree.dot"
     case pDeps of
         Left parserError -> error $ show parserError
         Right deps       -> return deps
 
 allUpdatedRepoDeps :: IO [(PackageName , DirectDependency)]
 allUpdatedRepoDeps = do
-    pDeps <- parse allDependencies "" <$> readFile "repoinfo/gendepsUpdated.dot"
+    pDeps <- parse allDependencies "" <$> readFile "repoinfo/updatedDepTree.dot"
     case pDeps of
         Left parserError -> error $ show parserError
         Right deps       -> return deps
@@ -48,14 +48,14 @@ allOriginalRepoIndirDeps = do
 -- in the tuple is the version of the `PackageName` within that tuple.
 allOriginalRepoVers :: IO [(PackageName, Version)]
 allOriginalRepoVers = do
-    pVers <- parse versions "" <$> readFile "repoinfo/depsVers.txt"
+    pVers <- parse versions "" <$> readFile "repoinfo/currentDepTreeVersions.txt"
     case pVers of
         Left parserError -> error $ show parserError
         Right vers       -> return vers
 
 allUpdatedRepoVers :: IO [(PackageName, Version)]
 allUpdatedRepoVers = do
-    pVers <- parse versions "" <$> readFile "repoinfo/depsVersUpdated.txt"
+    pVers <- parse versions "" <$> readFile "repoinfo/updatedDepTreeVersions.txt"
     case pVers of
         Left parserError -> error $ show parserError
         Right vers       -> return vers
@@ -130,7 +130,7 @@ tuplesToList allDeps = do
 
 repoName :: IO String
 repoName = do
-    name <- parse packageName' "" <$> readFile "repoinfo/gendeps.dot"
+    name <- parse packageName' "" <$> readFile "repoinfo/currentDepTree.dot"
     case name of
         Left parserError -> error $ show parserError
         Right deps       -> return deps
