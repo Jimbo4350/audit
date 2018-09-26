@@ -180,7 +180,7 @@ deleteHash = do
             runBeamSqlite conn $ runDelete $
                 delete (_hash auditorDb)
                     (\table -> _hashDotHash table ==. val_ dbHashInt)
-        Nothing -> print "Hash not found in database"
+        Nothing -> print ("Hash not found in database" :: String)
     close conn
 
 ------------------- Original Database insertion -------------------
@@ -337,7 +337,7 @@ updateDiffTableDirectDeps = do
     depsInDiff <- queryDiff
     if all (== False ) [x `elem` map unpack depsInDiff | x <- dDeps]
         then insertUpdatedDependencies dDeps True True
-        else print "Already added new direct dependencies to the Diff table"
+        else print ("Already added new direct dependencies to the Diff table" :: String)
 
 -- | Inserts new indirect dependencies into the diff table.
 updateDiffTableIndirectDeps :: IO ()
@@ -346,7 +346,7 @@ updateDiffTableIndirectDeps = do
     depsInDiff <- queryDiff
     if all (== False ) [x `elem` map unpack depsInDiff | x <- newDeps]
         then insertUpdatedDependencies newDeps False True
-        else print "Already added new indirect dependencies to the Diff table"
+        else print ("Already added new indirect dependencies to the Diff table" :: String)
 
 updateDiffTableRemovedDeps :: IO ()
 updateDiffTableRemovedDeps = do
@@ -356,7 +356,7 @@ updateDiffTableRemovedDeps = do
     if all (== False ) [x `elem` map unpack depsInDiff | x <- rDeps]
         then insertRemovedDependencies rDepText True False
         -- TODO: Need to differentiate between direct and indirect removed deps
-        else print "Already added removed dependencies to the Diff table"
+        else print ("Already added removed dependencies to the Diff table" :: String)
 
 -- | Add a new dependency to the Auditor table or modify an
 -- existing dependency in the Auditor table
