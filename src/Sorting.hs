@@ -14,10 +14,11 @@ module Sorting
        , tuplesToList
        ) where
 
-import           Data.List   (nub, (\\), groupBy)
+import           Data.List   (groupBy, nub, (\\))
 import           Parser      (allDependencies, packageName', versions)
 import           Text.Parsec (parse)
-import           Types       (DirectDependency, PackageName, Version)
+import           Types       (DirectDependency, IndirectDependency, PackageName,
+                              Version)
 
 
 -- | Returns all the packages in the repo and their direct depdendencies.
@@ -37,7 +38,7 @@ allUpdatedRepoDeps = do
         Left parserError -> error $ show parserError
         Right deps       -> return deps
 
-allOriginalRepoIndirDeps :: IO [PackageName]
+allOriginalRepoIndirDeps :: IO [IndirectDependency]
 allOriginalRepoIndirDeps = do
     allDeps <- groupParseResults <$> allOriginalRepoDeps
     dDeps <- originalDirectDeps

@@ -88,7 +88,7 @@ audit = do
                 print "Hash not found, generating db."
                 initializeDB
                 generateInitialDepFiles
-                initialAuditorTable
+                initialAuditorTable "auditor.db"
 
 update :: IO ()
 update = do
@@ -108,7 +108,7 @@ update = do
                   contents <- (++) <$> readFile "repoinfo/updatedDepTree.dot"
                                    <*> readFile "repoinfo/updatedDepTreeVersions.txt"
                   -- Update hash in hash table
-                  insertHash $ hash contents
+                  insertHash "auditor.db" $ hash contents
                   -- Delete the new dependencies (that was just added to the auditor table)
                   -- in the Diff table
                   clearDiffTable

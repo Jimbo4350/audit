@@ -25,6 +25,7 @@ dependencies:
 - containers
 - directory
 - hashable
+- hedgehog
 - mtl
 - optparse-applicative
 - parsec
@@ -56,8 +57,11 @@ executables:
 
 tests:
   audit-test:
-    main:                Spec.hs
+    main:                test.hs
     source-dirs:         test
+    other-modules:
+    - Test.Gen
+    - Test.TempDatabase
     ghc-options:
     - -threaded
     - -rtsopts

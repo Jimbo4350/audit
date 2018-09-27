@@ -12,8 +12,6 @@ module Database
        , deleteHash
        , initialAuditorTable
        , insertHash
-       , insertPackageDiff
-       , insertRemovedDependencies
        , loadDiffIntoAuditor
        , queryAuditor
        , queryDiff
@@ -57,8 +55,12 @@ import           Sorting                                    (allOriginalRepoIndi
                                                              newIndirectDeps,
                                                              originalDirectDeps,
                                                              removedDeps)
-import           Types                                      (HashStatus (..),
-                                                             Package (..))
+import           Types                                      (DirectDependency,
+                                                             HashStatus (..),
+                                                             IndirectDependency,
+                                                             Package (..),
+                                                             PackageName,
+                                                             Version)
 
 -- | Auditor Table. Stores the current direct, indirect and
 -- removed dependencies.
@@ -201,21 +203,26 @@ deleteHash = do
 -- | Inserts direct and indirect dependencies into the sqlite db
 -- and inserts a hash of the dot and txt files generated. This
 -- represents the "original" or starting state of the repository.
-initialAuditorTable :: IO ()
-initialAuditorTable = do
-    insertOriginalDepsAuditor
-    (++) <$> readFile "repoinfo/currentDepTree.dot"
-         <*> readFile "repoinfo/currentDepTreeVersions.txt" >>= insertHash . hash
-
--- | Inserts original direct & indirect dependencies into auditor table.
-insertOriginalDepsAuditor :: IO ()
-insertOriginalDepsAuditor = do
+initialAuditorTable :: String -> IO ()
+initialAuditorTable dbFilename = do
     pVersions <- allOriginalRepoVers
     dDeps <- originalDirectDeps
     indirectDeps <- allOriginalRepoIndirDeps
+    insertOriginalDepsAuditor dbFilename pVersions dDeps indirectDeps
+    (++) <$> readFile "repoinfo/currentDepTree.dot"
+         <*> readFile "repoinfo/currentDepTreeVersions.txt" >>= insertHash dbFilename . hash
+
+-- | Inserts original direct & indirect dependencies into auditor table.
+-- TODO: Rethink about this, you may have abstracted a pattern.
+insertOriginalDepsAuditor :: String
+                          -> [(PackageName, Version)]
+                          -> [DirectDependency]
+                          -> [IndirectDependency]
+                          -> IO ()
+insertOriginalDepsAuditor dbFilename pVersions dDeps indirectDeps = do
     cTime <- getCurrentTime
     -- Direct deps insertion
-    mapM_ (\x -> insertPackageAuditor
+    mapM_ (\x -> insertPackageAuditor dbFilename
                      (Package
                          (pack x)
                          (pack $ fromMaybe "No version Found" (lookup x pVersions))
@@ -224,7 +231,7 @@ insertOriginalDepsAuditor = do
                          True
                          [])) dDeps
     -- Indirect deps insertion
-    mapM_ (\x -> insertPackageAuditor
+    mapM_ (\x -> insertPackageAuditor dbFilename
                  (Package
                      (pack x)
                      (pack $ fromMaybe "No version Found" (lookup x pVersions))
@@ -234,27 +241,27 @@ insertOriginalDepsAuditor = do
                      [])) indirectDeps
   where
     -- Takes a `Package` and inserts it into the Auditor table.
-    insertPackageAuditor :: Package -> IO ()
-    insertPackageAuditor pkg = do
-        conn <- open "auditor.db"
+    insertPackageAuditor :: String -> Package -> IO ()
+    insertPackageAuditor dbFname pkg = do
+        conn <- open dbFname
         runBeamSqlite conn $ runInsert $
             insert (_auditor auditorDb) $
             insertValues [ toAuditor pkg ]
         close conn
 
 -- | Takes a hash and inserts it into the Hash table.
-insertHash :: Int -> IO ()
-insertHash dotHash = do
-    conn <- open "auditor.db"
+insertHash :: String -> Int -> IO ()
+insertHash dbFilename dotHash = do
+    conn <- open dbFilename
     runBeamSqlite conn $ runInsert $
         insert (_hash auditorDb) $
         insertValues [ Hash dotHash ]
     close conn
 
 -- | Takes a newly added `Package` and inserts it into the Diff table.
-insertPackageDiff :: Package -> IO ()
-insertPackageDiff (Package pName pVersion dateFS dDep sUsed aStatus) = do
-    conn <- open "auditor.db"
+insertPackageDiff :: String -> Package -> IO ()
+insertPackageDiff dbFilename (Package pName pVersion dateFS dDep sUsed aStatus) = do
+    conn <- open dbFilename
     runBeamSqlite conn $ runInsert $
         insert (_diff  auditorDb) $
         insertValues [ Diff
@@ -270,10 +277,10 @@ insertPackageDiff (Package pName pVersion dateFS dDep sUsed aStatus) = do
 -- | Updates diff with removed dep. Queries auditor because
 -- after the dep is removed from the repository,
 -- `stack ls dependencies` can no longer get the version.
-insertRemovedDependencies :: [Text] -> Bool -> Bool -> IO ()
-insertRemovedDependencies [] _ _ = pure ()
-insertRemovedDependencies (x:xs) dirOrIndir inYaml = do
-    conn <- open "auditor.db"
+insertRemovedDependencies :: String -> [Text] -> Bool -> Bool -> IO ()
+insertRemovedDependencies _ [] _ _ = pure ()
+insertRemovedDependencies dbFilename (x:xs) dirOrIndir inYaml = do
+    conn <- open dbFilename
     audQresult <- runBeamSqlite conn $ do
         let primaryKeyLookup = lookup_ (_auditor auditorDb)
         let sqlQuery = primaryKeyLookup $ AuditorPackageName x
@@ -282,7 +289,7 @@ insertRemovedDependencies (x:xs) dirOrIndir inYaml = do
     let dFSeen = _auditorDateFirstSeen $ fromJust audQresult
     case parseUTCTime dFSeen of
         Right utcTime -> do
-                           insertPackageDiff (Package
+                           insertPackageDiff dbFilename (Package
                                x
                                (_auditorPackageVersion $ fromJust audQresult)
                                utcTime
@@ -290,21 +297,21 @@ insertRemovedDependencies (x:xs) dirOrIndir inYaml = do
                                inYaml
                                [])
                            close conn
-                           insertRemovedDependencies xs dirOrIndir inYaml
+                           insertRemovedDependencies dbFilename xs dirOrIndir inYaml
         Left err -> print err -- TODO: Figure out why this case gets matched. Responsible for "endOfInput"
 
 
 -- | Insert updated dependencies into a db table.
 -- depList    = list of dependencies you want to insert.
--- dirOrIndir = Bool signlaing whether or not the depdencies you are
+-- dirOrIndir = Bool signlaing whether or not the dependencies you are
 --              inserting are direct or indirect.
--- stillUsed  = Bool signaling whether or not the depencies you
---              are inserting are direct or indirt.
+-- inYaml     = Bool signaling whether or not the dependencies you
+--              are still in use.
 insertUpdatedDependencies :: [String] -> Bool -> Bool -> IO ()
 insertUpdatedDependencies depList dirOrIndir inYaml = do
     cTime <- getCurrentTime
     pVersions <- allUpdatedRepoVers
-    mapM_ (\x -> insertPackageDiff
+    mapM_ (\x -> insertPackageDiff "auditor.db"
         (Package
             (pack x)
             (pack $ fromMaybe "No version Found" (lookup x pVersions))
@@ -369,7 +376,7 @@ updateDiffTableRemovedDeps = do
     let rDepText = map pack rDeps -- TODO: Neaten this up
     depsInDiff <- queryDiff
     if all (== False ) [x `elem` map unpack depsInDiff | x <- rDeps]
-        then insertRemovedDependencies rDepText True False
+        then insertRemovedDependencies "auditor.db" rDepText True False
         -- TODO: Need to differentiate between direct and indirect removed deps
         else print ("Already added removed dependencies to the Diff table" :: String)
 
@@ -421,8 +428,6 @@ updateOrModify (x:xs) = do
                                       (val_ $ _diffStillUsed matchedDep)
                                       (val_ $ _diffAnalysisStatus matchedDep))
             updateOrModify xs
-
-
 
 -- | Returns all entries in the Auditor table.
 queryAuditor :: IO [Auditor]
