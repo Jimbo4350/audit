@@ -100,11 +100,11 @@ removedDeps = do
 
 -- | Returns direct depedencies of the repo before any changes were
 -- made to the cabal file.
-originalDirectDeps :: IO [String]
+originalDirectDeps ::  IO [String]
 originalDirectDeps = do
     rName <- repoName
     aDeps <- allOriginalRepoDeps
-    let repoDirDeps = filter (\x -> rName == fst x) (groupParseResults aDeps)
+    let repoDirDeps = packageDependencies rName aDeps
     pure $ concatMap snd repoDirDeps
 
 -- | Returns direct depedencies of the repo after any changes were
@@ -113,7 +113,7 @@ updatedDirectDeps :: IO [String]
 updatedDirectDeps = do
     rName <- repoName
     aDeps <- allUpdatedRepoDeps
-    let repoDirDeps = filter (\x -> rName == fst x) (groupParseResults aDeps)
+    let repoDirDeps = packageDependencies rName aDeps
     pure $ concatMap snd repoDirDeps
 
 ------------------------------Helpers-----------------------------------
@@ -123,6 +123,10 @@ groupParseResults :: [(String, String)] -> [(String, [String])]
 groupParseResults list = do
     let grouped = groupBy (\x y -> fst x == fst y) list
     [(fst $ head x, map snd x)| x <- grouped]
+
+packageDependencies :: String -> [(String, String)] -> [(String, [String])]
+packageDependencies pkg depTree =
+    filter (\x -> pkg == fst x) (groupParseResults depTree)
 
 tuplesToList :: [(String, [String])] -> [String]
 tuplesToList allDeps = do

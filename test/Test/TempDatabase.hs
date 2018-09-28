@@ -3,7 +3,6 @@ module Test.TempDatabase
        , tempDb
        ) where
 
-import           Database                   (insertOriginalDepsAuditor)
 import           Hedgehog.Internal.Property (Property, forAll, property, (===))
 import           System.Process             (callCommand)
 import           Test.Gen                   (genNameVersion)

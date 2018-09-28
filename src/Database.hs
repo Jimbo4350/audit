@@ -29,6 +29,8 @@ import           Data.Maybe                                 (fromJust,
                                                              isNothing)
 import           Data.Text                                  (Text, pack, unpack)
 import           Data.Time.Clock                            (getCurrentTime)
+import           Data.Time.Format                           (defaultTimeLocale,
+                                                             formatTime)
 import           Database.Beam                              (Beamable, Columnar,
                                                              Database,
                                                              DatabaseSettings,
@@ -232,13 +234,13 @@ insertOriginalDepsAuditor dbFilename pVersions dDeps indirectDeps = do
                          [])) dDeps
     -- Indirect deps insertion
     mapM_ (\x -> insertPackageAuditor dbFilename
-                 (Package
-                     (pack x)
-                     (pack $ fromMaybe "No version Found" (lookup x pVersions))
-                     cTime
-                     False
-                     True
-                     [])) indirectDeps
+                     (Package
+                         (pack x)
+                         (pack $ fromMaybe "No version Found" (lookup x pVersions))
+                         cTime
+                         False
+                         True
+                         [])) indirectDeps
   where
     -- Takes a `Package` and inserts it into the Auditor table.
     insertPackageAuditor :: String -> Package -> IO ()
@@ -262,12 +264,13 @@ insertHash dbFilename dotHash = do
 insertPackageDiff :: String -> Package -> IO ()
 insertPackageDiff dbFilename (Package pName pVersion dateFS dDep sUsed aStatus) = do
     conn <- open dbFilename
+    let fTime = formatTime defaultTimeLocale "%F %X%Q" dateFS
     runBeamSqlite conn $ runInsert $
         insert (_diff  auditorDb) $
         insertValues [ Diff
                            pName
                            pVersion
-                           (pack $ show dateFS)
+                           (pack fTime)
                            (pack $ show dDep)
                            (pack $ show sUsed)
                            (pack $ show aStatus)
@@ -287,6 +290,7 @@ insertRemovedDependencies dbFilename (x:xs) dirOrIndir inYaml = do
         runSelectReturningOne sqlQuery
     -- Gets original time the package was first added.
     let dFSeen = _auditorDateFirstSeen $ fromJust audQresult
+    print dFSeen
     case parseUTCTime dFSeen of
         Right utcTime -> do
                            insertPackageDiff dbFilename (Package
@@ -297,8 +301,9 @@ insertRemovedDependencies dbFilename (x:xs) dirOrIndir inYaml = do
                                inYaml
                                [])
                            close conn
-                           insertRemovedDependencies dbFilename xs dirOrIndir inYaml
-        Left err -> print err -- TODO: Figure out why this case gets matched. Responsible for "endOfInput"
+                           insertRemovedDependencies dbFilename xs dirOrIndir False
+        Left err -> do
+            print err -- TODO: Figure out why this case gets matched. Responsible for "endOfInput"
 
 
 -- | Insert updated dependencies into a db table.
@@ -469,11 +474,12 @@ queryDiff'  = do
 
 
 toAuditor :: Package -> Auditor
-toAuditor (Package pName pVersion dateFS dDep sUsed aStatus) =
+toAuditor (Package pName pVersion dateFS dDep sUsed aStatus) = do
+    let fTime = formatTime defaultTimeLocale "%F %X%Q" dateFS
     Auditor
         pName
         pVersion
-        (pack $ show dateFS)
+        (pack fTime)
         (pack $ show dDep)
         (pack $ show sUsed)
         (pack $ show aStatus)
