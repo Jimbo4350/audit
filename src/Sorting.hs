@@ -1,5 +1,6 @@
 module Sorting
        ( allOriginalRepoDeps
+       , allOriginalDepsGrouped
        , allOriginalRepoIndirDeps
        , allOriginalRepoVers
        , allUpdatedRepoDeps
@@ -20,6 +21,8 @@ import           Text.Parsec (parse)
 import           Types       (DirectDependency, IndirectDependency, PackageName,
                               Version)
 
+allOriginalDepsGrouped :: IO [(PackageName, [DirectDependency])]
+allOriginalDepsGrouped = groupParseResults <$> allOriginalRepoDeps
 
 -- | Returns all the packages in the repo and their direct depdendencies.
 -- The repo itself is considered a package. NB: The direct dependency in
@@ -40,7 +43,7 @@ allUpdatedRepoDeps = do
 
 allOriginalRepoIndirDeps :: IO [IndirectDependency]
 allOriginalRepoIndirDeps = do
-    allDeps <- groupParseResults <$> allOriginalRepoDeps
+    allDeps <- allOriginalDepsGrouped
     dDeps <- originalDirectDeps
     return $ nub (tuplesToList allDeps) \\ dDeps
 
@@ -139,4 +142,3 @@ repoName = do
     case name of
         Left parserError -> error $ show parserError
         Right deps       -> return deps
-

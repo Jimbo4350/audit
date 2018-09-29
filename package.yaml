@@ -3,7 +3,7 @@ version:             0.1.0.0
 github:              "githubuser/audit"
 license:             BSD3
 author:              "Jordan Millar"
-maintainer:          "jordan.millar@IOHK.io"
+maintainer:          "jordan.millar@iohk.io"
 
 extra-source-files:
 - README.md
@@ -41,6 +41,7 @@ library:
   - Generate
   - Parser
   - Sorting
+  - Tree
   - Types
   ghc-options: -Wall
 

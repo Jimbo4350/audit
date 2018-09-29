@@ -12,6 +12,7 @@ module Database
        , deleteHash
        , initialAuditorTable
        , insertHash
+       , insertOriginalDeps
        , loadDiffIntoAuditor
        , queryAuditor
        , queryDiff
@@ -210,21 +211,21 @@ initialAuditorTable dbFilename = do
     pVersions <- allOriginalRepoVers
     dDeps <- originalDirectDeps
     indirectDeps <- allOriginalRepoIndirDeps
-    insertOriginalDepsAuditor dbFilename pVersions dDeps indirectDeps
+    insertOriginalDeps dbFilename pVersions dDeps indirectDeps
     (++) <$> readFile "repoinfo/currentDepTree.dot"
          <*> readFile "repoinfo/currentDepTreeVersions.txt" >>= insertHash dbFilename . hash
 
 -- | Inserts original direct & indirect dependencies into auditor table.
 -- TODO: Rethink about this, you may have abstracted a pattern.
-insertOriginalDepsAuditor :: String
-                          -> [(PackageName, Version)]
-                          -> [DirectDependency]
-                          -> [IndirectDependency]
-                          -> IO ()
-insertOriginalDepsAuditor dbFilename pVersions dDeps indirectDeps = do
+insertOriginalDeps :: String
+                   -> [(PackageName, Version)]
+                   -> [DirectDependency]
+                   -> [IndirectDependency]
+                   -> IO ()
+insertOriginalDeps dbFilename pVersions dDeps indirectDeps = do
     cTime <- getCurrentTime
     -- Direct deps insertion
-    mapM_ (\x -> insertPackageAuditor dbFilename
+    mapM_ (\x -> insertPackage dbFilename
                      (Package
                          (pack x)
                          (pack $ fromMaybe "No version Found" (lookup x pVersions))
@@ -233,7 +234,7 @@ insertOriginalDepsAuditor dbFilename pVersions dDeps indirectDeps = do
                          True
                          [])) dDeps
     -- Indirect deps insertion
-    mapM_ (\x -> insertPackageAuditor dbFilename
+    mapM_ (\x -> insertPackage dbFilename
                      (Package
                          (pack x)
                          (pack $ fromMaybe "No version Found" (lookup x pVersions))
@@ -243,8 +244,8 @@ insertOriginalDepsAuditor dbFilename pVersions dDeps indirectDeps = do
                          [])) indirectDeps
   where
     -- Takes a `Package` and inserts it into the Auditor table.
-    insertPackageAuditor :: String -> Package -> IO ()
-    insertPackageAuditor dbFname pkg = do
+    insertPackage :: String -> Package -> IO ()
+    insertPackage dbFname pkg = do
         conn <- open dbFname
         runBeamSqlite conn $ runInsert $
             insert (_auditor auditorDb) $
@@ -483,4 +484,3 @@ toAuditor (Package pName pVersion dateFS dDep sUsed aStatus) = do
         (pack $ show dDep)
         (pack $ show sUsed)
         (pack $ show aStatus)
-

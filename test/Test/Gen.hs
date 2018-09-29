@@ -2,13 +2,13 @@ module Test.Gen
        ( genNameVersion
        , genPackageName
        , genPackageVersion
-       , genSimpleDepTree
+       , genSimpleDepList
        ) where
 
 import           Hedgehog
-import qualified Hedgehog.Gen as Gen
+import qualified Hedgehog.Gen   as Gen
 import qualified Hedgehog.Range as Range
-import Sorting
+import           Sorting        (groupParseResults)
 
 genNameVersion :: Gen [(String,String)]
 genNameVersion = do
@@ -16,11 +16,11 @@ genNameVersion = do
     pVersions <- Gen.list (Range.constant 3 20) genPackageVersion
     pure $ zip pNames pVersions
 
-genSimpleDepTree :: Gen [(String, String)]
-genSimpleDepTree = do
+genSimpleDepList :: Gen [(String, [String])]
+genSimpleDepList = do
     directDep <- genPackageName
     indirectDep <- genPackageName
-    pure [("MainRepository", directDep), (directDep, indirectDep)]
+    pure $ groupParseResults [("MainRepository", directDep), (directDep, indirectDep)]
 
 genPackageName :: Gen String
 genPackageName =
