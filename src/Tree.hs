@@ -1,6 +1,7 @@
 module Tree
        ( buildDepTree
        , deconstructDepTree
+       , depTreeLevel
        ) where
 
 import           Data.Tree (Forest, Tree (..))
@@ -36,14 +37,7 @@ extractDep (Node pName _) = pName
 deconstructDepTree :: Tree String -> [(String, [String])]
 deconstructDepTree (Node _ []) = []
 deconstructDepTree (Node x subDeps) = (x, map extractDep subDeps) : deconstructDepForest subDeps
-
-deconstructDepForest :: Forest String -> [(String, [String])]
-deconstructDepForest [] = []
-deconstructDepForest (Node x subDeps : xs) =
-    filter (\x -> snd x /= []) $ concatMap treeDepth subDeps ++ treeBreadth (Node x subDeps : xs)
   where
-    treeDepth :: Tree String -> [(String, [String])]
-    treeDepth (Node x subDeps) = deconstructDepForest subDeps
-    treeBreadth :: Forest String -> [(String, [String])]
-    treeBreadth (Node x subDeps : xs) =
-        (x, map extractDep subDeps) : deconstructDepForest xs
+    deconstructDepForest :: Forest String -> [(String, [String])]
+    deconstructDepForest [] = []
+    deconstructDepForest forest = concatMap deconstructDepTree forest

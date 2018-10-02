@@ -20,7 +20,8 @@ genSimpleDepList :: Gen [(String, [String])]
 genSimpleDepList = do
     directDep <- genPackageName
     indirectDep <- genPackageName
-    pure $ groupParseResults [("MainRepository", directDep), (directDep, indirectDep)]
+    furthestDep <- genPackageName
+    pure $ groupParseResults [("MainRepository", directDep), (directDep, indirectDep), (indirectDep, furthestDep)]
 
 genPackageName :: Gen String
 genPackageName =

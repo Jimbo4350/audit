@@ -61,6 +61,7 @@ tests:
     main:                test.hs
     source-dirs:         test
     other-modules:
+    - Test.DepTree
     - Test.Gen
     - Test.TempDatabase
     ghc-options:
