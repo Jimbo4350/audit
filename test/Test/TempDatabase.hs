@@ -1,8 +1,34 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 module Test.TempDatabase where
 
-import           Database                   (insertOriginalDeps)
+import           Control.Monad.IO.Class
+import           Data.List                  (sort)
+import           Data.Text                  (unpack)
+import           Database                   (Auditor (..), clearAuditorTable,
+                                             insertDeps, queryAuditorDepNames)
+import           Hedgehog
+import           Hedgehog.Internal.Property (Property, forAll, property,
+                                             withTests, (===))
 import           System.Process             (callCommand)
+import           Test.Gen                   (genSimpleDepList)
+import           Tree                       (buildDepTree, directDeps,
+                                             indirectDeps)
 
+prop_db_insert_dependencies :: Property
+prop_db_insert_dependencies =
+    withTests 1 . property $ do
+        xs <- forAll genSimpleDepList
+        let dDeps = directDeps $ buildDepTree "MainRepository" xs
+        let inDeps = indirectDeps $ buildDepTree "MainRepository" xs
+        liftIO $ insertDeps "temp.db" [] dDeps inDeps
+        allDbDeps <- liftIO $ queryAuditorDepNames "temp.db"
+        liftIO $ clearAuditorTable "temp.db"
+        sort (map unpack allDbDeps) === sort (dDeps ++ inDeps)
+
+tests :: IO Bool
+tests = and <$> sequence
+    [ checkParallel $$(discover) ]
 
 ----------------------------------------------------------------------------
 -- Helpers

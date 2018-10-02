@@ -7,14 +7,17 @@
 {-# LANGUAGE TypeSynonymInstances  #-}
 
 module Database
-       ( checkHash
+       ( Auditor
+       , checkHash
+       , clearAuditorTable
        , clearDiffTable
        , deleteHash
        , initialAuditorTable
        , insertHash
-       , insertOriginalDeps
+       , insertDeps
        , loadDiffIntoAuditor
        , queryAuditor
+       , queryAuditorDepNames
        , queryDiff
        , queryDiff'
        , queryHash
@@ -176,6 +179,15 @@ compareDiffAuditor (Diff _ dVersion _ _ diffStUsed _)
         (True, "False") -> Just (Auditor aPkgName aVersion aDateFSeen aDirDep "False" aStat)
         (True, "True")  -> Just (Auditor aPkgName aVersion aDateFSeen aDirDep "True" aStat)
         _               -> Nothing
+-- | Delete the dependencies in the auditor table.
+clearAuditorTable :: String -> IO ()
+clearAuditorTable dbName = do
+    conn <- open dbName
+    allAuditorDeps <- queryAuditorDepNames dbName
+    mapM_ (\x -> runBeamSqlite conn $ runDelete $
+        delete (_auditor auditorDb)
+            (\c -> _auditorPackageName c ==. val_ x)) allAuditorDeps
+    close conn
 
 -- | Delete the dependencies in the diff table.
 clearDiffTable :: IO ()
@@ -211,18 +223,18 @@ initialAuditorTable dbFilename = do
     pVersions <- allOriginalRepoVers
     dDeps <- originalDirectDeps
     indirectDeps <- allOriginalRepoIndirDeps
-    insertOriginalDeps dbFilename pVersions dDeps indirectDeps
+    insertDeps dbFilename pVersions dDeps indirectDeps
     (++) <$> readFile "repoinfo/currentDepTree.dot"
          <*> readFile "repoinfo/currentDepTreeVersions.txt" >>= insertHash dbFilename . hash
 
 -- | Inserts original direct & indirect dependencies into auditor table.
 -- TODO: Rethink about this, you may have abstracted a pattern.
-insertOriginalDeps :: String
+insertDeps :: String
                    -> [(PackageName, Version)]
                    -> [DirectDependency]
                    -> [IndirectDependency]
                    -> IO ()
-insertOriginalDeps dbFilename pVersions dDeps indirectDeps = do
+insertDeps dbFilename pVersions dDeps indirectDeps = do
     cTime <- getCurrentTime
     -- Direct deps insertion
     mapM_ (\x -> insertPackage dbFilename
@@ -436,14 +448,23 @@ updateOrModify (x:xs) = do
             updateOrModify xs
 
 -- | Returns all entries in the Auditor table.
-queryAuditor :: IO [Auditor]
-queryAuditor  = do
-    conn <- open "auditor.db"
+queryAuditor :: String -> IO [Auditor]
+queryAuditor  dbName = do
+    conn <- open dbName
     let allEntries = all_ (_auditor auditorDb)
     entries <- runBeamSqlite conn $
         runSelectReturningList $ select allEntries
     close conn
     return entries
+
+queryAuditorDepNames :: String -> IO [Text]
+queryAuditorDepNames dbName  = do
+    conn <- open dbName
+    let allEntries = all_ (_auditor auditorDb)
+    entries <- runBeamSqlite conn $
+        runSelectReturningList $ select allEntries
+    close conn
+    return $ map _auditorPackageName entries
 
 -- | Query and returns the hash in db.
 queryHash :: IO (Maybe Hash)
