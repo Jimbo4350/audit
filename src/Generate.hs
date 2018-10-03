@@ -98,7 +98,7 @@ update = do
         _ -> do
                   print "Inserting changes from Diff table into \
                         \Auditor table.."
-                  loadDiffIntoAuditor
+                  loadDiffIntoAuditor "auditor.db"
                   print "Overwriting original repository dependency \
                         \tree & clearing Diff table"
                   callCommand "stack dot --external > repoinfo/currentDepTree.dot"
@@ -111,6 +111,6 @@ update = do
                   insertHash "auditor.db" $ hash contents
                   -- Delete the new dependencies (that was just added to the auditor table)
                   -- in the Diff table
-                  clearDiffTable
+                  clearDiffTable "auditor.db"
                   callCommand "rm repoinfo/updatedDepTreeVersions.txt"
                   callCommand "rm repoinfo/updatedDepTree.dot"

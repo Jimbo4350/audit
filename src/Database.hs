@@ -15,10 +15,12 @@ module Database
        , initialAuditorTable
        , insertHash
        , insertDeps
+       , insertRemovedDependencies
        , loadDiffIntoAuditor
        , queryAuditor
        , queryAuditorDepNames
        , queryAuditorDepVersions
+       , queryAuditorRemovedDeps
        , queryDiff
        , queryDiff'
        , queryHash
@@ -59,10 +61,13 @@ import           Database.SQLite.Simple.Time.Implementation (parseUTCTime)
 import           Sorting                                    (allOriginalRepoIndirDeps,
                                                              allOriginalRepoVers,
                                                              allUpdatedRepoVers,
+                                                             initialDepTree,
                                                              newDirDeps,
                                                              newIndirectDeps,
                                                              originalDirectDeps,
                                                              removedDeps)
+import           Tree                                       (directDeps,
+                                                             indirectDeps)
 import           Types                                      (DirectDependency,
                                                              HashStatus (..),
                                                              IndirectDependency,
@@ -192,9 +197,9 @@ clearAuditorTable dbName = do
     close conn
 
 -- | Delete the dependencies in the diff table.
-clearDiffTable :: IO ()
-clearDiffTable = do
-    conn <- open "auditor.db"
+clearDiffTable :: String -> IO ()
+clearDiffTable dbName = do
+    conn <- open dbName
     allDiffDeps <- queryDiff
     mapM_ (\x -> runBeamSqlite conn $ runDelete $
         delete (_diff auditorDb)
@@ -225,9 +230,8 @@ initialAuditorTable dbFilename = do
     pVersions' <- allOriginalRepoVers
     -- TODO: Thread `Text` through the repo
     let pVersions = [bimap unpack unpack x | x <- pVersions']
-    dDeps <- originalDirectDeps
-    indirectDeps <- allOriginalRepoIndirDeps
-    insertDeps dbFilename pVersions dDeps indirectDeps
+    iDepTree <- initialDepTree
+    insertDeps dbFilename pVersions (directDeps iDepTree) (indirectDeps iDepTree)
     (++) <$> readFile "repoinfo/currentDepTree.dot"
          <*> readFile "repoinfo/currentDepTreeVersions.txt" >>= insertHash dbFilename . hash
 
@@ -319,7 +323,7 @@ insertRemovedDependencies dbFilename (x:xs) dirOrIndir inYaml = do
                                [])
                            close conn
                            insertRemovedDependencies dbFilename xs dirOrIndir False
-        Left err -> do
+        Left err ->
             print err -- TODO: Figure out why this case gets matched. Responsible for "endOfInput"
 
 
@@ -342,9 +346,9 @@ insertUpdatedDependencies depList dirOrIndir inYaml = do
             inYaml
             [])) depList
 
-loadDiffIntoAuditor :: IO ()
-loadDiffIntoAuditor = do
-    conn <- open "auditor.db"
+loadDiffIntoAuditor :: String -> IO ()
+loadDiffIntoAuditor dbName = do
+    conn <- open dbName
     diffDeps <-  queryDiff
     -- Check to see if the dependency in Diff exists in Auditor
     -- If it does, indicates either a version change or dependency removal
@@ -478,6 +482,16 @@ queryAuditorDepVersions dbName  = do
         runSelectReturningList $ select allEntries
     close conn
     return $ map _auditorPackageVersion entries
+
+queryAuditorRemovedDeps :: String -> IO [Text]
+queryAuditorRemovedDeps dbName  = do
+    conn <- open dbName
+    let allEntries = all_ (_auditor auditorDb)
+    entries <- runBeamSqlite conn $
+        runSelectReturningList $ select allEntries
+    close conn
+    let remDeps = filter (\x -> _auditorStillUsed x == "False") entries
+    return $ map _auditorPackageName remDeps
 
 -- | Query and returns the hash in db.
 queryHash :: IO (Maybe Hash)

@@ -7,7 +7,7 @@ import           Data.List                  (sort, nub)
 import           Hedgehog
 import           Hedgehog.Internal.Property (Property, forAll, property,
                                              withTests, (===))
-import           Sorting                    (allOriginalDepsGrouped, repoName)
+import           Sorting                    (allInitialDepsGrouped, repoName)
 import           Test.Gen                   (genSimpleDepList)
 import           Tree                       (buildDepTree, deconstructDepTree)
 
@@ -21,7 +21,7 @@ prop_simpleDeptree_construction_deconstruction =
 prop_repoDeptree_construction_deconstruction :: Property
 prop_repoDeptree_construction_deconstruction =
     withTests 1 . property $ do
-        allDeps <- liftIO allOriginalDepsGrouped
+        allDeps <- liftIO allInitialDepsGrouped
         name <- liftIO repoName
         (sort . nub . deconstructDepTree $ buildDepTree name allDeps) === sort allDeps
 

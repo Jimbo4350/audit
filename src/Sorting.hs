@@ -1,11 +1,12 @@
 module Sorting
        ( allOriginalRepoDeps
-       , allOriginalDepsGrouped
+       , allInitialDepsGrouped
        , allOriginalRepoIndirDeps
        , allOriginalRepoVers
        , allUpdatedRepoDeps
        , allUpdatedRepoVers
        , groupParseResults
+       , initialDepTree
        , newIndirectDeps
        , newVersions
        , newDirDeps
@@ -18,13 +19,15 @@ module Sorting
 import           Data.Bifunctor (bimap)
 import           Data.List      (groupBy, nub, (\\))
 import           Data.Text      (Text, pack, unpack)
+import           Data.Tree      (Tree)
 import           Parser         (allDependencies, packageName', versions)
 import           Text.Parsec    (parse)
+import           Tree           (buildDepTree)
 import           Types          (DirectDependency, IndirectDependency,
                                  PackageName, Version)
 
-allOriginalDepsGrouped :: IO [(PackageName, [DirectDependency])]
-allOriginalDepsGrouped = groupParseResults <$> allOriginalRepoDeps
+allInitialDepsGrouped :: IO [(PackageName, [DirectDependency])]
+allInitialDepsGrouped = groupParseResults <$> allOriginalRepoDeps
 
 -- | Returns all the packages in the repo and their direct depdendencies.
 -- The repo itself is considered a package. NB: The direct dependency in
@@ -45,7 +48,7 @@ allUpdatedRepoDeps = do
 
 allOriginalRepoIndirDeps :: IO [IndirectDependency]
 allOriginalRepoIndirDeps = do
-    allDeps <- allOriginalDepsGrouped
+    allDeps <- allInitialDepsGrouped
     dDeps <- originalDirectDeps
     return $ nub (tuplesToList allDeps) \\ dDeps
 
@@ -104,6 +107,15 @@ removedDeps = do
     oldDeps <- allOriginalRepoDeps
     newDeps <- allUpdatedRepoDeps
     return . map snd $ filter (\x -> rName == fst x) (oldDeps \\ newDeps)
+
+-- | Initial dependency tree (does not contain package versions)
+
+initialDepTree :: IO (Tree String)
+initialDepTree = do
+    rName <- repoName
+    iDeps <- allInitialDepsGrouped
+    pure $ buildDepTree rName iDeps
+
 
 -- | Returns direct depedencies of the repo before any changes were
 -- made to the cabal file.
