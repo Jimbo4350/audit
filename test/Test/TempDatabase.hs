@@ -17,7 +17,7 @@ import           Tree                       (buildDepTree, directDeps,
 
 prop_db_insert_dependencies :: Property
 prop_db_insert_dependencies =
-    withTests 1 . property $ do
+    withTests 100 . property $ do
         xs <- forAll genSimpleDepList
         let dDeps = directDeps $ buildDepTree "MainRepository" xs
         let inDeps = indirectDeps $ buildDepTree "MainRepository" xs
@@ -25,6 +25,10 @@ prop_db_insert_dependencies =
         allDbDeps <- liftIO $ queryAuditorDepNames "temp.db"
         liftIO $ clearAuditorTable "temp.db"
         sort (map unpack allDbDeps) === sort (dDeps ++ inDeps)
+
+-- TODO: Incorporate versions into the insertion property.
+-- you will need to generate versions and therefore change
+-- your tree structure.
 
 tests :: IO Bool
 tests = and <$> sequence
