@@ -18,6 +18,7 @@ module Database
        , loadDiffIntoAuditor
        , queryAuditor
        , queryAuditorDepNames
+       , queryAuditorDepVersions
        , queryDiff
        , queryDiff'
        , queryHash
@@ -26,6 +27,7 @@ module Database
        , updateDiffTableRemovedDeps
        ) where
 
+import           Data.Bifunctor                             (bimap)
 import           Data.Hashable                              (hash)
 import           Data.List                                  (all, find)
 import           Data.Maybe                                 (fromJust,
@@ -220,7 +222,9 @@ deleteHash = do
 -- represents the "original" or starting state of the repository.
 initialAuditorTable :: String -> IO ()
 initialAuditorTable dbFilename = do
-    pVersions <- allOriginalRepoVers
+    pVersions' <- allOriginalRepoVers
+    -- TODO: Thread `Text` through the repo
+    let pVersions = [bimap unpack unpack x | x <- pVersions']
     dDeps <- originalDirectDeps
     indirectDeps <- allOriginalRepoIndirDeps
     insertDeps dbFilename pVersions dDeps indirectDeps
@@ -465,6 +469,15 @@ queryAuditorDepNames dbName  = do
         runSelectReturningList $ select allEntries
     close conn
     return $ map _auditorPackageName entries
+
+queryAuditorDepVersions :: String -> IO [Text]
+queryAuditorDepVersions dbName  = do
+    conn <- open dbName
+    let allEntries = all_ (_auditor auditorDb)
+    entries <- runBeamSqlite conn $
+        runSelectReturningList $ select allEntries
+    close conn
+    return $ map _auditorPackageVersion entries
 
 -- | Query and returns the hash in db.
 queryHash :: IO (Maybe Hash)

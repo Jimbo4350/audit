@@ -1,5 +1,5 @@
 module Test.Gen
-       ( genNameVersion
+       ( genNameVersions
        , genPackageName
        , genPackageVersion
        , genSimpleDepList
@@ -10,9 +10,8 @@ import qualified Hedgehog.Gen   as Gen
 import qualified Hedgehog.Range as Range
 import           Sorting        (groupParseResults)
 
-genNameVersion :: Gen [(String,String)]
-genNameVersion = do
-    pNames <- Gen.list (Range.constant 3 20) genPackageName
+genNameVersions :: [String] -> Gen [(String,String)]
+genNameVersions pNames = do
     pVersions <- Gen.list (Range.constant 3 20) genPackageVersion
     pure $ zip pNames pVersions
 

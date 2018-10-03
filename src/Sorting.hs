@@ -15,11 +15,13 @@ module Sorting
        , tuplesToList
        ) where
 
-import           Data.List   (groupBy, nub, (\\))
-import           Parser      (allDependencies, packageName', versions)
-import           Text.Parsec (parse)
-import           Types       (DirectDependency, IndirectDependency, PackageName,
-                              Version)
+import           Data.Bifunctor (bimap)
+import           Data.List      (groupBy, nub, (\\))
+import           Data.Text      (Text, pack, unpack)
+import           Parser         (allDependencies, packageName', versions)
+import           Text.Parsec    (parse)
+import           Types          (DirectDependency, IndirectDependency,
+                                 PackageName, Version)
 
 allOriginalDepsGrouped :: IO [(PackageName, [DirectDependency])]
 allOriginalDepsGrouped = groupParseResults <$> allOriginalRepoDeps
@@ -50,12 +52,12 @@ allOriginalRepoIndirDeps = do
 -- | Returns all the packages in the repo and their versions. Again
 -- the repo itself is considered a package and is included. NB: The version
 -- in the tuple is the version of the `PackageName` within that tuple.
-allOriginalRepoVers :: IO [(PackageName, Version)]
+allOriginalRepoVers :: IO [(Text, Text)]
 allOriginalRepoVers = do
     pVers <- parse versions "" <$> readFile "repoinfo/currentDepTreeVersions.txt"
     case pVers of
         Left parserError -> error $ show parserError
-        Right vers       -> return vers
+        Right vers       -> return [ bimap pack pack x | x <- vers ]
 
 allUpdatedRepoVers :: IO [(PackageName, Version)]
 allUpdatedRepoVers = do
@@ -88,7 +90,9 @@ newDirDeps = do
 newVersions :: IO [(String, String)]
 newVersions = do
     rName <- repoName
-    oldVers <- allOriginalRepoVers
+    oldVers' <- allOriginalRepoVers
+    -- TODO: Thread `Text` through the repo
+    let oldVers = [bimap unpack unpack x | x <- oldVers']
     newVers <- allUpdatedRepoVers
     return $ filter (\x -> rName == fst x) newVers \\ oldVers
 

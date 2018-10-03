@@ -3,15 +3,16 @@
 module Test.TempDatabase where
 
 import           Control.Monad.IO.Class
-import           Data.List                  (sort)
-import           Data.Text                  (unpack)
+import           Data.List                  (sort, all)
+import           Data.Text                  (pack, unpack)
 import           Database                   (Auditor (..), clearAuditorTable,
-                                             insertDeps, queryAuditorDepNames)
+                                             insertDeps, queryAuditorDepNames,
+                                             queryAuditorDepVersions)
 import           Hedgehog
 import           Hedgehog.Internal.Property (Property, forAll, property,
-                                             withTests, (===))
+                                             withTests, (===), assert)
 import           System.Process             (callCommand)
-import           Test.Gen                   (genSimpleDepList)
+import           Test.Gen                   (genSimpleDepList, genNameVersions)
 import           Tree                       (buildDepTree, directDeps,
                                              indirectDeps)
 
@@ -21,10 +22,16 @@ prop_db_insert_dependencies =
         xs <- forAll genSimpleDepList
         let dDeps = directDeps $ buildDepTree "MainRepository" xs
         let inDeps = indirectDeps $ buildDepTree "MainRepository" xs
-        liftIO $ insertDeps "temp.db" [] dDeps inDeps
+        versions <- forAll $ genNameVersions (dDeps ++ inDeps)
+        liftIO $ insertDeps "temp.db" versions dDeps inDeps
         allDbDeps <- liftIO $ queryAuditorDepNames "temp.db"
+        allDbVersions <- liftIO $ queryAuditorDepVersions "temp.db"
         liftIO $ clearAuditorTable "temp.db"
-        sort (map unpack allDbDeps) === sort (dDeps ++ inDeps)
+        let test = [ (==) (sort allDbDeps) (sort (map pack dDeps ++ map pack inDeps))
+                   , ((==) versions (zip (map unpack allDbDeps) (map unpack allDbVersions)))
+                   ]
+        if all (== True) test then assert True else assert False
+
 
 -- TODO: Incorporate versions into the insertion property.
 -- you will need to generate versions and therefore change
@@ -32,7 +39,7 @@ prop_db_insert_dependencies =
 
 tests :: IO Bool
 tests = and <$> sequence
-    [ checkParallel $$(discover) ]
+    [ checkParallel $$discover ]
 
 ----------------------------------------------------------------------------
 -- Helpers
