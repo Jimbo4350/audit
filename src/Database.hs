@@ -15,6 +15,7 @@ module Database
        , initialAuditorTable
        , insertHash
        , insertDeps
+       , insertPackageDiff
        , insertRemovedDependencies
        , insertUpdatedDependencies
        , loadDiffIntoAuditor
@@ -24,6 +25,7 @@ module Database
        , queryAuditorRemovedDeps
        , queryDiff
        , queryDiff'
+       , queryDiffRemovedDeps
        , queryHash
        , updateDiffTableDirectDeps
        , updateDiffTableIndirectDeps
@@ -33,8 +35,7 @@ module Database
 import           Data.Bifunctor                             (bimap)
 import           Data.Hashable                              (hash)
 import           Data.List                                  (all, find)
-import           Data.Maybe                                 (fromJust,
-                                                             fromMaybe,
+import           Data.Maybe                                 (fromMaybe,
                                                              isNothing)
 import           Data.Text                                  (Text, pack, unpack)
 import           Data.Time.Clock                            (getCurrentTime)
@@ -304,26 +305,29 @@ insertRemovedDependencies :: String -> [Text] -> Bool -> Bool -> IO ()
 insertRemovedDependencies _ [] _ _ = pure ()
 insertRemovedDependencies dbFilename (x:xs) dirOrIndir inYaml = do
     conn <- open dbFilename
+    -- Queries auditor
     audQresult <- runBeamSqlite conn $ do
         let primaryKeyLookup = lookup_ (_auditor auditorDb)
         let sqlQuery = primaryKeyLookup $ AuditorPackageName x
         runSelectReturningOne sqlQuery
     -- Gets original time the package was first added.
-    let dFSeen = _auditorDateFirstSeen $ fromJust audQresult
-    print dFSeen
-    case parseUTCTime dFSeen of
-        Right utcTime -> do
-                           insertPackageDiff dbFilename (Package
-                               x
-                               (_auditorPackageVersion $ fromJust audQresult)
-                               utcTime
-                               dirOrIndir
-                               inYaml
-                               [])
-                           close conn
-                           insertRemovedDependencies dbFilename xs dirOrIndir False
-        Left err ->
-            print err -- TODO: Figure out why this case gets matched. Responsible for "endOfInput"
+    case audQresult of
+        Nothing -> insertRemovedDependencies dbFilename xs dirOrIndir False
+        Just result -> do
+                         let dFSeen = _auditorDateFirstSeen result
+                         case parseUTCTime dFSeen of
+                             Right utcTime -> do
+                                                insertPackageDiff dbFilename (Package
+                                                    x
+                                                    (_auditorPackageVersion result)
+                                                    utcTime
+                                                    dirOrIndir
+                                                    inYaml
+                                                    [])
+                                                close conn
+                                                insertRemovedDependencies dbFilename xs dirOrIndir False
+                             Left err ->
+                                 print err -- TODO: Figure out why this case gets matched. Responsible for "endOfInput"
 
 
 -- | Insert updated dependencies into a db table.
@@ -433,33 +437,36 @@ updateOrModify (x:xs) = do
                            let primaryKeyLookup = lookup_ (_diff auditorDb)
                            let sqlQuery = primaryKeyLookup $ DiffPackageName x
                            runSelectReturningOne sqlQuery
-            let diffDep = fromJust diffQresult
-            -- Compare Diff and Audit query; return the updated dependency information
-            case compareDiffAuditor diffDep audDep of
-                Nothing -> error "Error in compareDiffAuditor: This should not happen"
-                Just depToIns -> do
-                    runBeamSqlite conn $ runDelete $
-                        delete (_auditor auditorDb)
-                            (\table -> _auditorPackageName table ==. (val_ $ _diffPackageName diffDep))
-                    runBeamSqlite conn $ runInsert $
-                        insert (_auditor auditorDb) $
-                        insertValues [ depToIns ]
-                    updateOrModify xs
+            case diffQresult of
+                Nothing -> updateOrModify xs
+                Just diffDep -> do
+                                  -- Compare Diff and Audit query; return the updated dependency information
+                                  case compareDiffAuditor diffDep audDep of
+                                      Nothing -> error "Error in compareDiffAuditor: This should not happen"
+                                      Just depToIns -> do
+                                          runBeamSqlite conn $ runDelete $
+                                              delete (_auditor auditorDb)
+                                                  (\table -> _auditorPackageName table ==. (val_ $ _diffPackageName diffDep))
+                                          runBeamSqlite conn $ runInsert $
+                                              insert (_auditor auditorDb) $
+                                              insertValues [ depToIns ]
+                                          updateOrModify xs
         -- New dependency to add to Auditor table.
         Nothing -> do
             diffList <- queryDiff'
-            runBeamSqlite conn $ runInsert $
-                insert (_auditor auditorDb) $
-                    insertFrom $ do
-                        -- TODO: Handle this fromJust properly
-                        let matchedDep = fromJust $ find (\diff -> _diffPackageName diff == x ) diffList
-                        pure (Auditor (val_ $ _diffPackageName matchedDep)
-                                      (val_ $ _diffPackageVersion matchedDep)
-                                      (val_ $ _diffDateFirstSeen matchedDep)
-                                      (val_ $ _diffDirectDep matchedDep)
-                                      (val_ $ _diffStillUsed matchedDep)
-                                      (val_ $ _diffAnalysisStatus matchedDep))
-            updateOrModify xs
+            case find (\diff -> _diffPackageName diff == x ) diffList of
+                Nothing -> updateOrModify xs
+                Just matchedDep -> do
+                                     runBeamSqlite conn $ runInsert $
+                                         insert (_auditor auditorDb) $
+                                             insertFrom $ do
+                                                 pure (Auditor (val_ $ _diffPackageName matchedDep)
+                                                               (val_ $ _diffPackageVersion matchedDep)
+                                                               (val_ $ _diffDateFirstSeen matchedDep)
+                                                               (val_ $ _diffDirectDep matchedDep)
+                                                               (val_ $ _diffStillUsed matchedDep)
+                                                               (val_ $ _diffAnalysisStatus matchedDep))
+                                     updateOrModify xs
 
 -- | Returns all entries in the Auditor table.
 queryAuditor :: String -> IO [Auditor]
@@ -517,6 +524,16 @@ queryDiff dbName = do
                runSelectReturningList $ select allEntries
     close conn
     return $ map  _diffPackageName entries
+
+queryDiffRemovedDeps :: String -> IO [Text]
+queryDiffRemovedDeps dbName  = do
+    conn <- open dbName
+    let allEntries = all_ (_diff auditorDb)
+    entries <- runBeamSqlite conn $
+        runSelectReturningList $ select allEntries
+    close conn
+    let remDeps = filter (\x -> _diffStillUsed x == "False") entries
+    return $ map _diffPackageName remDeps
 
 queryDiff' :: IO [Diff]
 queryDiff'  = do

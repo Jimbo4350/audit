@@ -7,43 +7,50 @@ import           Data.List                  (all, sort)
 import           Data.Text                  (pack, unpack)
 import           Database                   (Auditor (..), clearAuditorTable,
                                              clearDiffTable, insertDeps,
+                                             insertPackageDiff,
                                              insertRemovedDependencies,
                                              insertUpdatedDependencies,
                                              loadDiffIntoAuditor,
                                              queryAuditorDepNames,
                                              queryAuditorDepVersions,
-                                             queryAuditorRemovedDeps)
+                                             queryAuditorRemovedDeps, queryDiff,
+                                             queryDiffRemovedDeps)
 import           Hedgehog
 import           Hedgehog.Internal.Property (Property, assert, forAll, property,
                                              withTests, (===))
 import           System.Process             (callCommand)
-import           Test.Gen                   (genNameVersions, genSimpleDepList)
+import           Test.Gen                   (genNameVersions, genPackage,
+                                             genSimpleDepList)
 import           Tree                       (buildDepTree, directDeps,
                                              indirectDeps)
+import           Types                      (Package (..))
 
 
 -- | Inserts direct and indirect dependencies into the database
 -- via a `Tree`. It then compares what was inserted into the
 -- database to what was queried from the database.
 
-prop_db_insert_dependencies_auditor :: Property
-prop_db_insert_dependencies_auditor =
+prop_db_insert_initial_dependencies_auditor :: Property
+prop_db_insert_initial_dependencies_auditor =
     withTests 100 . property $ do
         xs <- forAll genSimpleDepList
         let dDeps = directDeps $ buildDepTree "MainRepository" xs
         let inDeps = indirectDeps $ buildDepTree "MainRepository" xs
         versions <- forAll $ genNameVersions (dDeps ++ inDeps)
+
+        -- Populate auditor table with initial deps.
         liftIO $ insertDeps "temp.db" versions dDeps inDeps
         queriedDeps <- liftIO $ queryAuditorDepNames "temp.db"
         queriedVers <- liftIO $ queryAuditorDepVersions "temp.db"
         liftIO $ clearAuditorTable "temp.db"
         let tests = [ (==) (sort queriedDeps) (sort (map pack dDeps ++ map pack inDeps))
+                    -- Make sure versions match
                     , (==) (zip (map unpack queriedDeps) (map unpack queriedVers)) versions
                     ]
         if all (== True) tests then assert True else assert False
 
-prop_db_insert_direct_dependencies_auditor :: Property
-prop_db_insert_direct_dependencies_auditor =
+prop_db_insert_new_dependencies_auditor :: Property
+prop_db_insert_new_dependencies_auditor =
     withTests 100 . property $ do
         -- Populate auditor table with initial deps.
         initial <- forAll genSimpleDepList
@@ -55,28 +62,64 @@ prop_db_insert_direct_dependencies_auditor =
         -- Put new deps into diff table.
         new <- forAll genSimpleDepList
         let newDirDeps = directDeps $ buildDepTree "MainRepository" new
-        versions <- forAll $ genNameVersions newDirDeps
+        let newInDirDeps = indirectDeps $ buildDepTree "MainRepository" new
+        versions <- forAll $ genNameVersions (newDirDeps ++ newInDirDeps)
         liftIO $ insertUpdatedDependencies "temp.db" versions newDirDeps True True
+        liftIO $ insertUpdatedDependencies "temp.db" versions newInDirDeps False True
 
-        -- Update auditor table with the new direct dependencies
-        -- and make sure diff table is cleared.
+        -- Update auditor table with the new direct dependencies.
         liftIO $ loadDiffIntoAuditor "temp.db"
 
         queriedDeps <- liftIO $ queryAuditorDepNames "temp.db"
         queriedVers <- liftIO $ queryAuditorDepVersions "temp.db"
-        let tests = [ (==) (sort $ map unpack queriedDeps) (sort $ newDirDeps ++ dDeps ++ inDeps)
+        let tests = [ (==) (sort $ map unpack queriedDeps) (sort $ newDirDeps ++ newInDirDeps ++ dDeps ++ inDeps)
                     ]
         liftIO $ clearDiffTable "temp.db"
         liftIO $ clearAuditorTable "temp.db"
         if all (== True) tests then assert True else assert False
 
-        -- TODO: You have updated the updateDiffTable functions
-        -- to accept a dbName and also the queryDiff function to
-        -- accept a dbName. Now you should be able to update the correct
-        -- database. Repo currently builds, you should be able to
-        -- test your property.
 
+prop_insertPackageDiff :: Property
+prop_insertPackageDiff =
+    withTests 100 . property $ do
+        pkg <- forAll genPackage
 
+        -- Populate diff with test `Package`s
+        liftIO $ insertPackageDiff "temp.db" pkg
+
+        -- Query diff table
+        queriedRemovedDeps <- liftIO $ queryDiff "temp.db"
+        let tests = [(==) queriedRemovedDeps [packageName pkg]]
+
+        liftIO $ clearDiffTable "temp.db"
+        liftIO $ clearAuditorTable "temp.db"
+        if all (== True) tests then assert True else assert False
+
+{-
+prop_db_remove_dependencies :: Property
+prop_db_remove_dependencies =
+    withTests 100 . property $ do
+        -- Populate auditor table with initial deps.
+        initial <- forAll genSimpleDepList
+        let dDeps = directDeps $ buildDepTree "MainRepository" initial
+        let inDeps = indirectDeps $ buildDepTree "MainRepository" initial
+        versions <- forAll $ genNameVersions (dDeps ++ inDeps)
+        liftIO $ insertDeps "temp.db" versions dDeps inDeps
+
+        -- Populate diff with removed dependencies
+        liftIO $ insertRemovedDependencies "temp.db" (map pack inDeps) False False
+        liftIO $ insertRemovedDependencies "temp.db" (map pack dDeps) True False
+
+        -- Update auditor table with the new direct dependencies.
+        liftIO $ loadDiffIntoAuditor "temp.db"
+
+        queriedRemovedDeps <- liftIO $ queryAuditorRemovedDeps "temp.db"
+        let tests = [(==) (sort $ map unpack queriedRemovedDeps) (sort (dDeps ++ inDeps )) ]
+
+        liftIO $ clearDiffTable "temp.db"
+        liftIO $ clearAuditorTable "temp.db"
+        if all (== True) tests then assert True else assert False
+-}
 {-
 prop_db_insert_removed_indirect_dependencies :: Property
 prop_db_insert_removed_indirect_dependencies =

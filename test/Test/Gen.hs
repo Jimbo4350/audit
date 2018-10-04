@@ -1,14 +1,22 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Test.Gen
        ( genNameVersions
+       , genPackage
        , genPackageName
        , genPackageVersion
        , genSimpleDepList
        ) where
 
+import qualified Data.Text
+import           Data.Time.Calendar (Day (..))
+import           Data.Time.Clock    (DiffTime (..), UTCTime (..),
+                                     secondsToDiffTime)
 import           Hedgehog
-import qualified Hedgehog.Gen   as Gen
-import qualified Hedgehog.Range as Range
-import           Sorting        (groupParseResults)
+import qualified Hedgehog.Gen       as Gen
+import qualified Hedgehog.Range     as Range
+import           Sorting            (groupParseResults)
+import           Types              (AnalysisStatus (..), Package (..))
 
 genNameVersions :: [String] -> Gen [(String,String)]
 genNameVersions pNames = do
@@ -34,3 +42,33 @@ genPackageVersion :: Gen String
 genPackageVersion = concat <$> sequence [rInt, Gen.constant ".", rInt, Gen.constant ".", rInt, Gen.constant ".", rInt]
   where
     rInt = Gen.string (Range.constant 1 2) Gen.digit
+
+genPackage :: Gen Package
+genPackage = do
+    pName <- genPackageName
+    pVersion <- genPackageVersion
+    pTime <- genUTCTime
+    dDep <- Gen.bool
+    sUsed <- Gen.bool
+    aStat <- genAnalysisStatus
+    pure $ Package
+               (Data.Text.pack pName)
+               (Data.Text.pack pVersion)
+               pTime
+               dDep
+               sUsed
+               aStat
+
+genAnalysisStatus :: Gen [AnalysisStatus]
+genAnalysisStatus = Gen.list (Range.singleton 1) (Gen.element [ ASGhcBoot
+                                                              , ASCommon
+                                                              , ASCritical
+                                                              , ASCrypto
+                                                              , ASUncategoried
+                                                              , ASNewDependency
+                                                              ])
+genUTCTime :: Gen UTCTime
+genUTCTime = do
+    diffTime <- Gen.integral (Range.linear 0 1000000)
+    day <- Gen.integral (Range.linear 0 1000000)
+    pure $ UTCTime (ModifiedJulianDay day) (secondsToDiffTime diffTime)
