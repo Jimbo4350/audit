@@ -6,7 +6,7 @@ import qualified Test.TempDatabase
 
 main :: IO ()
 main = do
-     -- ensure UTF-8. As that's what hedgehog needs.
+     -- ensure UTF-8 as that's what hedgehog needs.
     hSetEncoding stdout utf8
     hSetEncoding stderr utf8
     Test.TempDatabase.tempDb

@@ -16,6 +16,7 @@ module Database
        , insertHash
        , insertDeps
        , insertRemovedDependencies
+       , insertUpdatedDependencies
        , loadDiffIntoAuditor
        , queryAuditor
        , queryAuditorDepNames
@@ -58,13 +59,11 @@ import           Database.Beam.Query                        (lookup_, runSelectR
 import           Database.Beam.Sqlite
 import           Database.SQLite.Simple                     (close, open)
 import           Database.SQLite.Simple.Time.Implementation (parseUTCTime)
-import           Sorting                                    (allOriginalRepoIndirDeps,
-                                                             allOriginalRepoVers,
+import           Sorting                                    (allOriginalRepoVers,
                                                              allUpdatedRepoVers,
                                                              initialDepTree,
                                                              newDirDeps,
                                                              newIndirectDeps,
-                                                             originalDirectDeps,
                                                              removedDeps)
 import           Tree                                       (directDeps,
                                                              indirectDeps)
@@ -200,7 +199,7 @@ clearAuditorTable dbName = do
 clearDiffTable :: String -> IO ()
 clearDiffTable dbName = do
     conn <- open dbName
-    allDiffDeps <- queryDiff
+    allDiffDeps <- queryDiff dbName
     mapM_ (\x -> runBeamSqlite conn $ runDelete $
         delete (_diff auditorDb)
             (\c -> _diffPackageName c ==. val_ x)) allDiffDeps
@@ -242,7 +241,7 @@ insertDeps :: String
                    -> [DirectDependency]
                    -> [IndirectDependency]
                    -> IO ()
-insertDeps dbFilename pVersions dDeps indirectDeps = do
+insertDeps dbFilename pVersions dDeps indirDeps = do
     cTime <- getCurrentTime
     -- Direct deps insertion
     mapM_ (\x -> insertPackage dbFilename
@@ -261,7 +260,7 @@ insertDeps dbFilename pVersions dDeps indirectDeps = do
                          cTime
                          False
                          True
-                         [])) indirectDeps
+                         [])) indirDeps
   where
     -- Takes a `Package` and inserts it into the Auditor table.
     insertPackage :: String -> Package -> IO ()
@@ -333,11 +332,16 @@ insertRemovedDependencies dbFilename (x:xs) dirOrIndir inYaml = do
 --              inserting are direct or indirect.
 -- inYaml     = Bool signaling whether or not the dependencies you
 --              are still in use.
-insertUpdatedDependencies :: [String] -> Bool -> Bool -> IO ()
-insertUpdatedDependencies depList dirOrIndir inYaml = do
+insertUpdatedDependencies
+    :: String
+    -> [(String, String)]
+    -> [String]
+    -> Bool
+    -> Bool
+    -> IO ()
+insertUpdatedDependencies dbName pVersions depList dirOrIndir inYaml = do
     cTime <- getCurrentTime
-    pVersions <- allUpdatedRepoVers
-    mapM_ (\x -> insertPackageDiff "auditor.db"
+    mapM_ (\x -> insertPackageDiff dbName
         (Package
             (pack x)
             (pack $ fromMaybe "No version Found" (lookup x pVersions))
@@ -349,7 +353,7 @@ insertUpdatedDependencies depList dirOrIndir inYaml = do
 loadDiffIntoAuditor :: String -> IO ()
 loadDiffIntoAuditor dbName = do
     conn <- open dbName
-    diffDeps <-  queryDiff
+    diffDeps <-  queryDiff dbName
     -- Check to see if the dependency in Diff exists in Auditor
     -- If it does, indicates either a version change or dependency removal
     -- Returns a list of Maybes
@@ -379,30 +383,32 @@ loadDiffIntoAuditor dbName = do
 ------------------- Database updates -------------------
 
 -- | Inserts new direct dependencies into the diff table.
-updateDiffTableDirectDeps :: IO ()
-updateDiffTableDirectDeps = do
+updateDiffTableDirectDeps :: String ->  IO ()
+updateDiffTableDirectDeps dbName = do
+    pVersions <- allUpdatedRepoVers
     dDeps <- newDirDeps
-    depsInDiff <- queryDiff
+    depsInDiff <- queryDiff dbName
     if all (== False ) [x `elem` map unpack depsInDiff | x <- dDeps]
-        then insertUpdatedDependencies dDeps True True
+        then insertUpdatedDependencies dbName pVersions dDeps True True
         else print ("Already added new direct dependencies to the Diff table" :: String)
 
 -- | Inserts new indirect dependencies into the diff table.
-updateDiffTableIndirectDeps :: IO ()
-updateDiffTableIndirectDeps = do
+updateDiffTableIndirectDeps :: String ->  IO ()
+updateDiffTableIndirectDeps dbName = do
+    pVersions <- allUpdatedRepoVers
     newDeps <- newIndirectDeps
-    depsInDiff <- queryDiff
+    depsInDiff <- queryDiff dbName
     if all (== False ) [x `elem` map unpack depsInDiff | x <- newDeps]
-        then insertUpdatedDependencies newDeps False True
+        then insertUpdatedDependencies dbName pVersions newDeps False True
         else print ("Already added new indirect dependencies to the Diff table" :: String)
 
-updateDiffTableRemovedDeps :: IO ()
-updateDiffTableRemovedDeps = do
+updateDiffTableRemovedDeps :: String -> IO ()
+updateDiffTableRemovedDeps dbName = do
     rDeps <- removedDeps
     let rDepText = map pack rDeps -- TODO: Neaten this up
-    depsInDiff <- queryDiff
+    depsInDiff <- queryDiff dbName
     if all (== False ) [x `elem` map unpack depsInDiff | x <- rDeps]
-        then insertRemovedDependencies "auditor.db" rDepText True False
+        then insertRemovedDependencies dbName rDepText True False
         -- TODO: Need to differentiate between direct and indirect removed deps
         else print ("Already added removed dependencies to the Diff table" :: String)
 
@@ -503,9 +509,9 @@ queryHash = do
     close conn
     return entry
 
-queryDiff :: IO [Text]
-queryDiff  = do
-    conn <- open "auditor.db"
+queryDiff :: String ->  IO [Text]
+queryDiff dbName = do
+    conn <- open dbName
     let allEntries = all_ (_diff auditorDb)
     entries <- runBeamSqlite conn $
                runSelectReturningList $ select allEntries

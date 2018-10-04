@@ -81,9 +81,9 @@ audit = do
                 newDirDeps >>= (\x -> print $ "New dependencies: " ++ show x)
                 newVersions >>= (\x -> print $ "New dependency versions: " ++ show x)
                 removedDeps >>= (\x -> print $ "Removed dependencies: " ++ show x)
-                updateDiffTableDirectDeps
-                updateDiffTableIndirectDeps
-                updateDiffTableRemovedDeps
+                updateDiffTableDirectDeps "auditor.db"
+                updateDiffTableIndirectDeps "auditor.db"
+                updateDiffTableRemovedDeps "auditor.db"
             HashNotFound -> do
                 print "Hash not found, generating db."
                 initializeDB
