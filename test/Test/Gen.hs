@@ -5,6 +5,7 @@ module Test.Gen
        , genPackage
        , genPackageName
        , genPackageVersion
+       , genRemovedPackage
        , genSimpleDepList
        ) where
 
@@ -57,6 +58,21 @@ genPackage = do
                pTime
                dDep
                sUsed
+               aStat
+
+genRemovedPackage :: Gen Package
+genRemovedPackage = do
+    pName <- genPackageName
+    pVersion <- genPackageVersion
+    pTime <- genUTCTime
+    dDep <- Gen.bool
+    aStat <- genAnalysisStatus
+    pure $ Package
+               (Data.Text.pack pName)
+               (Data.Text.pack pVersion)
+               pTime
+               dDep
+               False
                aStat
 
 genAnalysisStatus :: Gen [AnalysisStatus]

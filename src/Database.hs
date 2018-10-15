@@ -354,6 +354,9 @@ insertUpdatedDependencies dbName pVersions depList dirOrIndir inYaml = do
             inYaml
             [])) depList
 
+-- | Insert dependencies from the Diff table to the Auditor table.
+-- If they are new dependencies, directly insert them otherwise
+-- call `updateOrModify`
 loadDiffIntoAuditor :: String -> IO ()
 loadDiffIntoAuditor dbName = do
     conn <- open dbName

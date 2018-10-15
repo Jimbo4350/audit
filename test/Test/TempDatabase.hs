@@ -20,6 +20,7 @@ import           Hedgehog.Internal.Property (Property, assert, forAll, property,
                                              withTests, (===))
 import           System.Process             (callCommand)
 import           Test.Gen                   (genNameVersions, genPackage,
+                                             genRemovedPackage,
                                              genSimpleDepList)
 import           Tree                       (buildDepTree, directDeps,
                                              indirectDeps)
@@ -49,6 +50,10 @@ prop_db_insert_initial_dependencies_auditor =
                     ]
         if all (== True) tests then assert True else assert False
 
+-- | Inserts direct and indirect dependencies into the diff table
+-- via a `Tree`. It then compares what was inserted into the
+-- diff table to what was queried from the database.
+
 prop_db_insert_new_dependencies_auditor :: Property
 prop_db_insert_new_dependencies_auditor =
     withTests 100 . property $ do
@@ -70,6 +75,7 @@ prop_db_insert_new_dependencies_auditor =
         -- Update auditor table with the new direct dependencies.
         liftIO $ loadDiffIntoAuditor "temp.db"
 
+        -- Query auditor table and compare the result to the generated dependencies.
         queriedDeps <- liftIO $ queryAuditorDepNames "temp.db"
         queriedVers <- liftIO $ queryAuditorDepVersions "temp.db"
         let tests = [ (==) (sort $ map unpack queriedDeps) (sort $ newDirDeps ++ newInDirDeps ++ dDeps ++ inDeps)
@@ -78,7 +84,7 @@ prop_db_insert_new_dependencies_auditor =
         liftIO $ clearAuditorTable "temp.db"
         if all (== True) tests then assert True else assert False
 
-
+-- | Insert `Package`s into the Diff table.
 prop_insertPackageDiff :: Property
 prop_insertPackageDiff =
     withTests 100 . property $ do
@@ -88,14 +94,36 @@ prop_insertPackageDiff =
         liftIO $ insertPackageDiff "temp.db" pkg
 
         -- Query diff table
-        queriedRemovedDeps <- liftIO $ queryDiff "temp.db"
-        let tests = [(==) queriedRemovedDeps [packageName pkg]]
+        queryDeps <- liftIO $ queryDiff "temp.db"
+        let tests = [(==) queryDeps [packageName pkg]]
 
         liftIO $ clearDiffTable "temp.db"
         liftIO $ clearAuditorTable "temp.db"
         if all (== True) tests then assert True else assert False
 
-{-
+
+-- | Insert `Package`s from Diff table to Auditor table.
+prop_loadDiffIntoAuditor :: Property
+prop_loadDiffIntoAuditor =
+    withTests 100 . property $ do
+        pkg <- forAll genPackage
+
+        -- Populate diff with test `Package`s
+        liftIO $ insertPackageDiff "temp.db" pkg
+
+
+        -- Update auditor table with the new direct dependencies.
+        liftIO $ loadDiffIntoAuditor "temp.db"
+
+        -- Query diff table
+        queryDeps <- liftIO $ queryAuditorDepNames "temp.db"
+        let tests = [(==) queryDeps [packageName pkg]]
+
+        liftIO $ clearDiffTable "temp.db"
+        liftIO $ clearAuditorTable "temp.db"
+        if all (== True) tests then assert True else assert False
+
+-- | Remove dependencies from the auditor table.
 prop_db_remove_dependencies :: Property
 prop_db_remove_dependencies =
     withTests 100 . property $ do
@@ -107,19 +135,19 @@ prop_db_remove_dependencies =
         liftIO $ insertDeps "temp.db" versions dDeps inDeps
 
         -- Populate diff with removed dependencies
-        liftIO $ insertRemovedDependencies "temp.db" (map pack inDeps) False False
-        liftIO $ insertRemovedDependencies "temp.db" (map pack dDeps) True False
+        pkg <- forAll genRemovedPackage
+        liftIO $ insertPackageDiff "temp.db" pkg
 
         -- Update auditor table with the new direct dependencies.
         liftIO $ loadDiffIntoAuditor "temp.db"
 
         queriedRemovedDeps <- liftIO $ queryAuditorRemovedDeps "temp.db"
-        let tests = [(==) (sort $ map unpack queriedRemovedDeps) (sort (dDeps ++ inDeps )) ]
+        let tests = [(==) (sort queriedRemovedDeps) [packageName pkg] ]
 
         liftIO $ clearDiffTable "temp.db"
         liftIO $ clearAuditorTable "temp.db"
         if all (== True) tests then assert True else assert False
--}
+
 {-
 prop_db_insert_removed_indirect_dependencies :: Property
 prop_db_insert_removed_indirect_dependencies =
