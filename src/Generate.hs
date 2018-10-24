@@ -5,17 +5,21 @@ module Generate
        , update
        ) where
 
+import           Data.Bifunctor   (bimap)
 import           Data.Hashable    (hash)
-import           Database         (checkHash, clearDiffTable, deleteHash,
-                                   initialAuditorTable, insertHash,
+import           Data.Text        (unpack)
+import           Database         (buildPackageList, checkHash, clearDiffTable,
+                                   deleteHash, insertDeps, insertHash,
                                    loadDiffIntoAuditor, queryDiff',
                                    updateDiffTableDirectDeps,
                                    updateDiffTableIndirectDeps,
                                    updateDiffTableRemovedDeps)
-import           Sorting          (newDirDeps, newVersions, originalDirectDeps,
+import           Sorting          (allOriginalRepoVers, initialDepTree,
+                                   newDirDeps, newVersions, originalDirectDeps,
                                    removedDeps)
 import           System.Directory (getDirectoryContents)
 import           System.Process   (callCommand)
+import           Tree             (directDeps, indirectDeps)
 import           Types            (Command (..), HashStatus (..))
 
 -- | Checks if "auditor.db" exists in pwd, if not creates it with the
@@ -88,7 +92,13 @@ audit = do
                 print "Hash not found, generating db."
                 initializeDB
                 generateInitialDepFiles
-                initialAuditorTable "auditor.db"
+                pVersions <- allOriginalRepoVers
+                iDepTree <- initialDepTree
+                let pVersions' = [bimap unpack unpack x | x <- pVersions]
+                packages <- buildPackageList pVersions' (directDeps iDepTree) (indirectDeps iDepTree)
+                insertDeps "auditor.db" packages
+                (++) <$> readFile "repoinfo/currentDepTree.dot"
+                     <*> readFile "repoinfo/currentDepTreeVersions.txt" >>= insertHash "auditor.db" . hash
 
 update :: IO ()
 update = do
@@ -103,7 +113,7 @@ update = do
                         \tree & clearing Diff table"
                   callCommand "stack dot --external > repoinfo/currentDepTree.dot"
                   print "Deleting old hash."
-                  deleteHash
+                  deleteHash "auditor.db"
                   -- `contents` will become the new hash
                   contents <- (++) <$> readFile "repoinfo/updatedDepTree.dot"
                                    <*> readFile "repoinfo/updatedDepTreeVersions.txt"

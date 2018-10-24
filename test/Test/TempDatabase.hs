@@ -3,10 +3,12 @@
 module Test.TempDatabase where
 
 import           Control.Monad.IO.Class
+import           Data.Bifunctor             (bimap)
 import           Data.List                  (all, sort)
 import           Data.Text                  (pack, unpack)
-import           Database                   (Auditor (..), clearAuditorTable,
-                                             clearDiffTable, insertDeps,
+import           Database                   (Auditor (..), buildPackageList,
+                                             clearAuditorTable, clearDiffTable,
+                                             deleteHash, insertDeps,
                                              insertPackageDiff,
                                              insertRemovedDependencies,
                                              insertUpdatedDependencies,
@@ -34,13 +36,15 @@ import           Types                      (Package (..))
 prop_db_insert_initial_dependencies_auditor :: Property
 prop_db_insert_initial_dependencies_auditor =
     withTests 100 . property $ do
+        -- Generate packages with versions.
         xs <- forAll genSimpleDepList
         let dDeps = directDeps $ buildDepTree "MainRepository" xs
         let inDeps = indirectDeps $ buildDepTree "MainRepository" xs
         versions <- forAll $ genNameVersions (dDeps ++ inDeps)
 
         -- Populate auditor table with initial deps.
-        liftIO $ insertDeps "temp.db" versions dDeps inDeps
+        packages <- liftIO $ buildPackageList versions dDeps inDeps
+        liftIO $ insertDeps "temp.db" packages
         queriedDeps <- liftIO $ queryAuditorDepNames "temp.db"
         queriedVers <- liftIO $ queryAuditorDepVersions "temp.db"
         liftIO $ clearAuditorTable "temp.db"
@@ -62,7 +66,8 @@ prop_db_insert_new_dependencies_auditor =
         let dDeps = directDeps $ buildDepTree "MainRepository" initial
         let inDeps = indirectDeps $ buildDepTree "MainRepository" initial
         versions <- forAll $ genNameVersions (dDeps ++ inDeps)
-        liftIO $ insertDeps "temp.db" versions dDeps inDeps
+        packages <- liftIO $ buildPackageList versions dDeps inDeps
+        liftIO $ insertDeps "temp.db" packages
 
         -- Put new deps into diff table.
         new <- forAll genSimpleDepList
@@ -132,7 +137,8 @@ prop_db_remove_dependencies =
         let dDeps = directDeps $ buildDepTree "MainRepository" initial
         let inDeps = indirectDeps $ buildDepTree "MainRepository" initial
         versions <- forAll $ genNameVersions (dDeps ++ inDeps)
-        liftIO $ insertDeps "temp.db" versions dDeps inDeps
+        packages <- liftIO $ buildPackageList versions dDeps inDeps
+        liftIO $ insertDeps "temp.db" packages
 
         -- Populate diff with removed dependencies
         pkg <- forAll genRemovedPackage
@@ -148,30 +154,32 @@ prop_db_remove_dependencies =
         liftIO $ clearAuditorTable "temp.db"
         if all (== True) tests then assert True else assert False
 
-{-
-prop_db_insert_removed_indirect_dependencies :: Property
-prop_db_insert_removed_indirect_dependencies =
-    withTests 1 . property $ do
-        liftIO tempDb
+prop_insertDeps :: Property
+prop_insertDeps =
+    withTests 100 . property $ do
+        -- Generate packages with versions.
         xs <- forAll genSimpleDepList
         let dDeps = directDeps $ buildDepTree "MainRepository" xs
         let inDeps = indirectDeps $ buildDepTree "MainRepository" xs
         versions <- forAll $ genNameVersions (dDeps ++ inDeps)
-        -- inserts into auditor table
-        liftIO $ insertDeps "temp.db" versions dDeps inDeps
 
-        liftIO $ insertRemovedDependencies "temp.db" (map pack inDeps) False False
-        liftIO $ loadDiffIntoAuditor "temp.db"
-        queriedRemDeps <- liftIO $ queryAuditorRemovedDeps "temp.db"
-        --liftIO $ clearDiffTable "temp.db"
-       -- liftIO $ clearAuditorTable "temp.db"
-        let tests = [ (==) (sort queriedRemDeps) (sort $ map pack dDeps)
+        -- Populate auditor 'table with test deps.
+        packages <- liftIO $ buildPackageList versions dDeps inDeps
+        liftIO $ insertDeps "temp.db" packages
+
+        -- Query auditor table and compare the result to the generated dependencies.
+        queriedDeps <- liftIO $ queryAuditorDepNames "temp.db"
+        queriedVers <- liftIO $ queryAuditorDepVersions "temp.db"
+        liftIO $ clearAuditorTable "temp.db"
+        let tests = [ (==) (sort queriedDeps) (sort (map pack dDeps ++ map pack inDeps))
+                       -- Make sure versions match
+                    , (==) (sort $ zip (map unpack queriedDeps) (map unpack queriedVers)) (sort versions)
                     ]
         if all (== True) tests then assert True else assert False
 
-       -- sort queriedRemDeps === (sort $ map pack dDeps)
--}
 
+-- TODO: Write test for `initialAuditorTable` then refactor using `buildInitialPackageList`
+-- be sure to use the dependency tree!
 
 tests :: IO Bool
 tests = and <$> sequence

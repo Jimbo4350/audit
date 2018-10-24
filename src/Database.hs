@@ -8,11 +8,11 @@
 
 module Database
        ( Auditor
+       , buildPackageList
        , checkHash
        , clearAuditorTable
        , clearDiffTable
        , deleteHash
-       , initialAuditorTable
        , insertHash
        , insertDeps
        , insertPackageDiff
@@ -207,9 +207,9 @@ clearDiffTable dbName = do
     close conn
 
 -- | Deletes the hash in the hash table.
-deleteHash :: IO ()
-deleteHash = do
-    conn <- open "auditor.db"
+deleteHash :: String -> IO ()
+deleteHash dbName = do
+    conn <- open dbName
     currentHash <- queryHash
     case currentHash of
         Just dbH ->  do
@@ -222,55 +222,43 @@ deleteHash = do
 
 ------------------- Original Database insertion -------------------
 
--- | Inserts direct and indirect dependencies into the sqlite db
--- and inserts a hash of the dot and txt files generated. This
--- represents the "original" or starting state of the repository.
-initialAuditorTable :: String -> IO ()
-initialAuditorTable dbFilename = do
-    pVersions' <- allOriginalRepoVers
-    -- TODO: Thread `Text` through the repo
-    let pVersions = [bimap unpack unpack x | x <- pVersions']
-    iDepTree <- initialDepTree
-    insertDeps dbFilename pVersions (directDeps iDepTree) (indirectDeps iDepTree)
-    (++) <$> readFile "repoinfo/currentDepTree.dot"
-         <*> readFile "repoinfo/currentDepTreeVersions.txt" >>= insertHash dbFilename . hash
+-- | Build package/dependency list for the initialization of
+-- the database.
+buildPackageList :: [(PackageName, Version)]
+                        -> [DirectDependency]
+                        -> [IndirectDependency]
+                        -> IO [Package]
+buildPackageList  pVersions dDeps indirDeps = do
+    cTime <- getCurrentTime
+    let directPackages = map (\x -> (Package
+                                 (pack x)
+                                 (lookupVersion x)
+                                 cTime
+                                 True
+                                 True
+                                 [])) dDeps
+
+    let indirectPackages = map (\x -> (Package
+                                   (pack x)
+                                   (lookupVersion x)
+                                   cTime
+                                   True
+                                   True
+                                   [])) indirDeps
+    return $ directPackages ++ indirectPackages
+  where
+    lookupVersion x = (pack $ fromMaybe "No version Found" (lookup x pVersions))
 
 -- | Inserts original direct & indirect dependencies into auditor table.
 -- TODO: Rethink about this, you may have abstracted a pattern.
-insertDeps :: String
-                   -> [(PackageName, Version)]
-                   -> [DirectDependency]
-                   -> [IndirectDependency]
-                   -> IO ()
-insertDeps dbFilename pVersions dDeps indirDeps = do
-    cTime <- getCurrentTime
-    -- Direct deps insertion
-    mapM_ (\x -> insertPackage dbFilename
-                     (Package
-                         (pack x)
-                         (pack $ fromMaybe "No version Found" (lookup x pVersions))
-                         cTime
-                         True
-                         True
-                         [])) dDeps
-    -- Indirect deps insertion
-    mapM_ (\x -> insertPackage dbFilename
-                     (Package
-                         (pack x)
-                         (pack $ fromMaybe "No version Found" (lookup x pVersions))
-                         cTime
-                         False
-                         True
-                         [])) indirDeps
-  where
-    -- Takes a `Package` and inserts it into the Auditor table.
-    insertPackage :: String -> Package -> IO ()
-    insertPackage dbFname pkg = do
-        conn <- open dbFname
-        runBeamSqlite conn $ runInsert $
-            insert (_auditor auditorDb) $
-            insertValues [ toAuditor pkg ]
-        close conn
+insertDeps :: String -> [Package] -> IO ()
+insertDeps dbFilename pkgs = do
+    let auditorConversion = map pkgToAuditor pkgs
+    conn <- open dbFilename
+    runBeamSqlite conn $ runInsert $
+        insert (_auditor auditorDb) $
+        insertValues auditorConversion
+    close conn
 
 -- | Takes a hash and inserts it into the Hash table.
 insertHash :: String -> Int -> IO ()
@@ -547,9 +535,8 @@ queryDiff'  = do
     close conn
     return entries
 
-
-toAuditor :: Package -> Auditor
-toAuditor (Package pName pVersion dateFS dDep sUsed aStatus) = do
+pkgToAuditor :: Package -> Auditor
+pkgToAuditor (Package pName pVersion dateFS dDep sUsed aStatus) = do
     let fTime = formatTime defaultTimeLocale "%F %X%Q" dateFS
     Auditor
         pName
@@ -558,3 +545,5 @@ toAuditor (Package pName pVersion dateFS dDep sUsed aStatus) = do
         (pack $ show dDep)
         (pack $ show sUsed)
         (pack $ show aStatus)
+
+
