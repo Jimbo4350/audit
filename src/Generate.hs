@@ -14,9 +14,9 @@ import           Database         (buildPackageList, checkHash, clearDiffTable,
                                    updateDiffTableDirectDeps,
                                    updateDiffTableIndirectDeps,
                                    updateDiffTableRemovedDeps)
-import           Sorting          (allOriginalRepoVers, initialDepTree,
-                                   newDirDeps, newVersions, originalDirectDeps,
-                                   removedDeps)
+import           Sorting          (allOriginalRepoVers, allUpdatedRepoVers,
+                                   initialDepTree, newDirDeps, newIndirectDeps,
+                                   newVersions, originalDirectDeps, removedDeps)
 import           System.Directory (getDirectoryContents)
 import           System.Process   (callCommand)
 import           Tree             (directDeps, indirectDeps)
@@ -85,8 +85,11 @@ audit = do
                 newDirDeps >>= (\x -> print $ "New dependencies: " ++ show x)
                 newVersions >>= (\x -> print $ "New dependency versions: " ++ show x)
                 removedDeps >>= (\x -> print $ "Removed dependencies: " ++ show x)
-                updateDiffTableDirectDeps "auditor.db"
-                updateDiffTableIndirectDeps "auditor.db"
+                pVersions <- allUpdatedRepoVers
+                dDeps <- newDirDeps
+                newInDeps <- newIndirectDeps
+                updateDiffTableDirectDeps "auditor.db" <$> (buildPackageList pVersions dDeps [])
+                updateDiffTableIndirectDeps "auditor.db" <$> (buildPackageList pVersions [] newInDeps)
                 updateDiffTableRemovedDeps "auditor.db"
             HashNotFound -> do
                 print "Hash not found, generating db."

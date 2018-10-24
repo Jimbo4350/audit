@@ -28,11 +28,35 @@ import           Tree                       (buildDepTree, directDeps,
                                              indirectDeps)
 import           Types                      (Package (..))
 
+prop_buildPackageList :: Property
+prop_buildPackageList =
+    withTests 100 . property $ do
+        -- Generate packages with versions.
+        xs <- forAll genSimpleDepList
+        let dDeps = directDeps $ buildDepTree "MainRepository" xs
+        let inDeps = indirectDeps $ buildDepTree "MainRepository" xs
+        versions <- forAll $ genNameVersions (dDeps ++ inDeps)
+
+        -- Build `Package` list
+        pkgs <- liftIO $ buildPackageList versions dDeps inDeps
+
+        -- Deconstruct `Packages`s to strings
+        let dDeps' = map (unpack . packageName ) (filter (\x -> directDep x == True) pkgs)
+        let inDeps' = map (unpack . packageName ) (filter (\x -> directDep x == False) pkgs)
+        let versions' = map (\x -> (unpack $ packageName x, unpack $ packageVersion x)) pkgs
+
+        -- Compare
+        let tests = [ (==) (sort dDeps') (sort dDeps)
+                    -- Make sure versions match
+                    , (==) (sort inDeps') (sort inDeps)
+                    , (==) (sort versions) (sort versions')
+                    ]
+        if all (== True) tests then assert True else assert False
+
 
 -- | Inserts direct and indirect dependencies into the database
 -- via a `Tree`. It then compares what was inserted into the
 -- database to what was queried from the database.
-
 prop_db_insert_initial_dependencies_auditor :: Property
 prop_db_insert_initial_dependencies_auditor =
     withTests 100 . property $ do
@@ -73,9 +97,10 @@ prop_db_insert_new_dependencies_auditor =
         new <- forAll genSimpleDepList
         let newDirDeps = directDeps $ buildDepTree "MainRepository" new
         let newInDirDeps = indirectDeps $ buildDepTree "MainRepository" new
-        versions <- forAll $ genNameVersions (newDirDeps ++ newInDirDeps)
-        liftIO $ insertUpdatedDependencies "temp.db" versions newDirDeps True True
-        liftIO $ insertUpdatedDependencies "temp.db" versions newInDirDeps False True
+        newVersions <- forAll $ genNameVersions (newDirDeps ++ newInDirDeps)
+        newPkgs <- liftIO $ buildPackageList newVersions newDirDeps newInDirDeps
+        liftIO $ insertUpdatedDependencies "temp.db" newPkgs
+        --liftIO $ insertUpdatedDependencies "temp.db" <$> buildPackageList versions [] newInDirDeps
 
         -- Update auditor table with the new direct dependencies.
         liftIO $ loadDiffIntoAuditor "temp.db"
@@ -83,11 +108,12 @@ prop_db_insert_new_dependencies_auditor =
         -- Query auditor table and compare the result to the generated dependencies.
         queriedDeps <- liftIO $ queryAuditorDepNames "temp.db"
         queriedVers <- liftIO $ queryAuditorDepVersions "temp.db"
-        let tests = [ (==) (sort $ map unpack queriedDeps) (sort $ newDirDeps ++ newInDirDeps ++ dDeps ++ inDeps)
-                    ]
+        --let tests = [ (==) (sort $ map unpack queriedDeps) (sort $ newDirDeps ++ newInDirDeps ++ dDeps ++ inDeps)
+        --            ]
         liftIO $ clearDiffTable "temp.db"
         liftIO $ clearAuditorTable "temp.db"
-        if all (== True) tests then assert True else assert False
+        (sort $ map unpack queriedDeps) === (sort $ newDirDeps ++ newInDirDeps ++ dDeps ++ inDeps)
+        --all (== True) tests === True
 
 -- | Insert `Package`s into the Diff table.
 prop_insertPackageDiff :: Property

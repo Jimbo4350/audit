@@ -253,6 +253,17 @@ queryAuditorRemovedDeps dbName  = do
 
 ------------------- Diff table Ops -------------------
 
+
+-- | Delete the dependencies in the diff table.
+clearDiffTable :: String -> IO ()
+clearDiffTable dbName = do
+    conn <- open dbName
+    allDiffDeps <- queryDiff dbName
+    mapM_ (\x -> runBeamSqlite conn $ runDelete $
+        delete (_diff auditorDb)
+            (\c -> _diffPackageName c ==. val_ x)) allDiffDeps
+    close conn
+
 -- | Takes a newly added `Package` and inserts it into the Diff table.
 insertPackageDiff :: String -> Package -> IO ()
 insertPackageDiff dbFilename (Package pName pVersion dateFS dDep sUsed aStatus) = do
@@ -270,39 +281,32 @@ insertPackageDiff dbFilename (Package pName pVersion dateFS dDep sUsed aStatus) 
                      ]
     close conn
 
--- | Delete the dependencies in the diff table.
-clearDiffTable :: String -> IO ()
-clearDiffTable dbName = do
-    conn <- open dbName
-    allDiffDeps <- queryDiff dbName
-    mapM_ (\x -> runBeamSqlite conn $ runDelete $
-        delete (_diff auditorDb)
-            (\c -> _diffPackageName c ==. val_ x)) allDiffDeps
-    close conn
-
 -- | Insert updated dependencies into a db Diff table.
 -- depList    = list of dependencies you want to insert.
 -- dirOrIndir = Bool signlaing whether or not the dependencies you are
 --              inserting are direct or indirect.
 -- inYaml     = Bool signaling whether or not the dependencies you
 --              are still in use.
-insertUpdatedDependencies
-    :: String
-    -> [(String, String)]
-    -> [String]
-    -> Bool
-    -> Bool
-    -> IO ()
-insertUpdatedDependencies dbName pVersions depList dirOrIndir inYaml = do
-    cTime <- getCurrentTime
-    mapM_ (\x -> insertPackageDiff dbName
-        (Package
-            (pack x)
-            (pack $ fromMaybe "No version Found" (lookup x pVersions))
-            cTime
-            dirOrIndir
-            inYaml
-            [])) depList
+
+insertUpdatedDependencies :: String -> [Package] -> IO ()
+insertUpdatedDependencies dbName pkgs = do
+    let diffConversion = map pkgToDiff pkgs
+    conn <- open dbName
+    runBeamSqlite conn $ runInsert $
+        insert (_diff auditorDb) $
+        insertValues diffConversion
+    close conn
+
+pkgToDiff :: Package -> Diff
+pkgToDiff (Package pName pVersion dateFS dDep sUsed aStatus) = do
+    let fTime = formatTime defaultTimeLocale "%F %X%Q" dateFS
+    Diff
+        pName
+        pVersion
+        (pack fTime)
+        (pack $ show dDep)
+        (pack $ show sUsed)
+        (pack $ show aStatus)
 
 queryDiff :: String ->  IO [Text]
 queryDiff dbName = do
@@ -333,23 +337,19 @@ queryDiff'  = do
     return entries
 
 -- | Inserts new direct dependencies into the diff table.
-updateDiffTableDirectDeps :: String ->  IO ()
-updateDiffTableDirectDeps dbName = do
-    pVersions <- allUpdatedRepoVers
-    dDeps <- newDirDeps
+updateDiffTableDirectDeps :: String -> [Package] -> IO ()
+updateDiffTableDirectDeps dbName pkgs = do
     depsInDiff <- queryDiff dbName
-    if all (== False ) [x `elem` map unpack depsInDiff | x <- dDeps]
-        then insertUpdatedDependencies dbName pVersions dDeps True True
+    if all (== False ) [packageName x `elem` depsInDiff | x <- pkgs]
+        then insertUpdatedDependencies dbName pkgs
         else print ("Already added new direct dependencies to the Diff table" :: String)
 
 -- | Inserts new indirect dependencies into the diff table.
-updateDiffTableIndirectDeps :: String ->  IO ()
-updateDiffTableIndirectDeps dbName = do
-    pVersions <- allUpdatedRepoVers
-    newDeps <- newIndirectDeps
+updateDiffTableIndirectDeps :: String -> [Package] -> IO ()
+updateDiffTableIndirectDeps dbName pkgs = do
     depsInDiff <- queryDiff dbName
-    if all (== False ) [x `elem` map unpack depsInDiff | x <- newDeps]
-        then insertUpdatedDependencies dbName pVersions newDeps False True
+    if all (== False ) [packageName x `elem` depsInDiff | x <- pkgs]
+        then insertUpdatedDependencies dbName pkgs
         else print ("Already added new indirect dependencies to the Diff table" :: String)
 
 updateDiffTableRemovedDeps :: String -> IO ()
@@ -370,7 +370,7 @@ buildPackageList :: [(PackageName, Version)]
                  -> [DirectDependency]
                  -> [IndirectDependency]
                  -> IO [Package]
-buildPackageList  pVersions dDeps indirDeps = do
+buildPackageList pVersions dDeps indirDeps = do
     cTime <- getCurrentTime
     let directPackages = map (\x -> (Package
                                  (pack x)
@@ -384,7 +384,7 @@ buildPackageList  pVersions dDeps indirDeps = do
                                    (pack x)
                                    (lookupVersion x)
                                    cTime
-                                   True
+                                   False
                                    True
                                    [])) indirDeps
     return $ directPackages ++ indirectPackages
