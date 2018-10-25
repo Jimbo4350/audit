@@ -8,16 +8,19 @@
 
 module Database
        ( Auditor
+       , AuditorT (..)
        , buildPackageList
        , checkHash
        , clearAuditorTable
        , clearDiffTable
        , deleteHash
+       , Diff
+       , DiffT (..)
        , insertHash
        , insertDeps
        , insertPackageDiff
        , insertRemovedDependencies
-       , insertUpdatedDependencies
+       , insertDiffDependencies
        , loadDiffIntoAuditor
        , queryAuditor
        , queryAuditorDepNames
@@ -58,10 +61,7 @@ import           Database.Beam.Query                        (lookup_, runSelectR
 import           Database.Beam.Sqlite
 import           Database.SQLite.Simple                     (close, open)
 import           Database.SQLite.Simple.Time.Implementation (parseUTCTime)
-import           Sorting                                    (allUpdatedRepoVers,
-                                                             newDirDeps,
-                                                             newIndirectDeps,
-                                                             removedDeps)
+import           Sorting                                    (removedDeps)
 import           Types                                      (DirectDependency,
                                                              HashStatus (..),
                                                              IndirectDependency,
@@ -288,8 +288,8 @@ insertPackageDiff dbFilename (Package pName pVersion dateFS dDep sUsed aStatus) 
 -- inYaml     = Bool signaling whether or not the dependencies you
 --              are still in use.
 
-insertUpdatedDependencies :: String -> [Package] -> IO ()
-insertUpdatedDependencies dbName pkgs = do
+insertDiffDependencies :: String -> [Package] -> IO ()
+insertDiffDependencies dbName pkgs = do
     let diffConversion = map pkgToDiff pkgs
     conn <- open dbName
     runBeamSqlite conn $ runInsert $
@@ -327,9 +327,9 @@ queryDiffRemovedDeps dbName  = do
     let remDeps = filter (\x -> _diffStillUsed x == "False") entries
     return $ map _diffPackageName remDeps
 
-queryDiff' :: IO [Diff]
-queryDiff'  = do
-    conn <- open "auditor.db"
+queryDiff' :: String ->  IO [Diff]
+queryDiff' dbName = do
+    conn <- open dbName
     let allEntries = all_ (_diff auditorDb)
     entries <- runBeamSqlite conn $
                runSelectReturningList $ select allEntries
@@ -341,7 +341,7 @@ updateDiffTableDirectDeps :: String -> [Package] -> IO ()
 updateDiffTableDirectDeps dbName pkgs = do
     depsInDiff <- queryDiff dbName
     if all (== False ) [packageName x `elem` depsInDiff | x <- pkgs]
-        then insertUpdatedDependencies dbName pkgs
+        then insertDiffDependencies dbName pkgs
         else print ("Already added new direct dependencies to the Diff table" :: String)
 
 -- | Inserts new indirect dependencies into the diff table.
@@ -349,7 +349,7 @@ updateDiffTableIndirectDeps :: String -> [Package] -> IO ()
 updateDiffTableIndirectDeps dbName pkgs = do
     depsInDiff <- queryDiff dbName
     if all (== False ) [packageName x `elem` depsInDiff | x <- pkgs]
-        then insertUpdatedDependencies dbName pkgs
+        then insertDiffDependencies dbName pkgs
         else print ("Already added new indirect dependencies to the Diff table" :: String)
 
 updateDiffTableRemovedDeps :: String -> IO ()
@@ -395,13 +395,15 @@ buildPackageList pVersions dDeps indirDeps = do
 
 -- | Compare an entry from the Diff table and Auditor table.
 -- Return a modified `Auditor` that will be inserted into the auditor table.
--- TODO: Matching on a string isn't particular nice....fix this.
 compareDiffAuditor :: Diff -> Auditor -> Maybe Auditor
 compareDiffAuditor (Diff _ dVersion _ _ diffStUsed _)
                    (Auditor aPkgName aVersion aDateFSeen aDirDep aStUsed aStat) =
     case (dVersion == aVersion, diffStUsed) of
+        -- The version has changed and the package is still used.
         (False, "True") -> Just (Auditor aPkgName dVersion aDateFSeen aDirDep aStUsed aStat)
+        -- The version has not changed and the pakcage is no longer used.
         (True, "False") -> Just (Auditor aPkgName aVersion aDateFSeen aDirDep "False" aStat)
+        -- The version has not changed and the package is still used.
         (True, "True")  -> Just (Auditor aPkgName aVersion aDateFSeen aDirDep "True" aStat)
         _               -> Nothing
 
@@ -505,7 +507,7 @@ updateOrModify (x:xs) = do
                                           updateOrModify xs
         -- New dependency to add to Auditor table.
         Nothing -> do
-            diffList <- queryDiff'
+            diffList <- queryDiff' "auditor.db"
             case find (\diff -> _diffPackageName diff == x ) diffList of
                 Nothing -> updateOrModify xs
                 Just matchedDep -> do

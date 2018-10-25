@@ -105,7 +105,7 @@ audit = do
 
 update :: IO ()
 update = do
-    entries <- queryDiff'
+    entries <- queryDiff' "auditor.db"
     case entries of
         [] -> print "Diff table empty"
         _ -> do
