@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Test.Gen
+module Test.Audit.Gen
        ( genNameVersions
        , genPackage
        , genPackageName
@@ -16,8 +16,8 @@ import           Data.Time.Clock    (DiffTime (..), UTCTime (..),
 import           Hedgehog
 import qualified Hedgehog.Gen       as Gen
 import qualified Hedgehog.Range     as Range
-import           Sorting            (groupParseResults)
-import           Types              (AnalysisStatus (..), Package (..))
+import           Audit.Sorting      (groupParseResults)
+import           Audit.Types        (AnalysisStatus (..), Package (..))
 
 genNameVersions :: [String] -> Gen [(String,String)]
 genNameVersions pNames = do

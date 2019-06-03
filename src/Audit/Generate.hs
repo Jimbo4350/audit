@@ -1,4 +1,4 @@
-module Generate
+module Audit.Generate
        ( commandHandler
        , audit
        , originalDirectDeps
@@ -8,19 +8,20 @@ module Generate
 import           Data.Bifunctor   (bimap)
 import           Data.Hashable    (hash)
 import           Data.Text        (unpack)
-import           Database         (buildPackageList, checkHash, clearDiffTable,
+import           System.Directory (getDirectoryContents)
+import           System.Process   (callCommand)
+
+import           Audit.Database   (buildPackageList, checkHash, clearDiffTable,
                                    deleteHash, insertDeps, insertHash,
                                    loadDiffIntoAuditor, queryDiff',
                                    updateDiffTableDirectDeps,
                                    updateDiffTableIndirectDeps,
                                    updateDiffTableRemovedDeps)
-import           Sorting          (allOriginalRepoVers, allUpdatedRepoVers,
+import           Audit.Sorting    (allOriginalRepoVers, allUpdatedRepoVers,
                                    initialDepTree, newDirDeps, newIndirectDeps,
                                    newVersions, originalDirectDeps, removedDeps)
-import           System.Directory (getDirectoryContents)
-import           System.Process   (callCommand)
-import           Tree             (directDeps, indirectDeps)
-import           Types            (Command (..), HashStatus (..))
+import           Audit.Tree       (directDeps, indirectDeps)
+import           Audit.Types      (Command (..), HashStatus (..))
 
 -- | Checks if "auditor.db" exists in pwd, if not creates it with the
 -- tables `auditor` (which holds all the dependency data) and `hash`

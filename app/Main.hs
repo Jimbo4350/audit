@@ -1,8 +1,9 @@
 module Main where
 
-import           Generate            (commandHandler)
 import           Options.Applicative
-import           Parser              (getCommand)
+
+import           Audit.Generate            (commandHandler)
+import           Audit.Parser              (getCommand)
 
 -- | Usage example "stack exec -- audit-exe --audit audit"
 

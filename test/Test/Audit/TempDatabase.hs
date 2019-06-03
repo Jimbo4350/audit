@@ -1,14 +1,20 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 
-module Test.TempDatabase where
+module Test.Audit.TempDatabase where
 
 import           Control.Monad.IO.Class
 import           Data.Bifunctor             (bimap)
 import           Data.List                  (all, sort)
 import           Data.Text                  (pack, unpack)
 import           Data.Time.Format           (defaultTimeLocale, formatTime)
-import           Database                   (Auditor, AuditorT (..), Diff,
+
+import           Hedgehog
+import           Hedgehog.Internal.Property (Property, assert, forAll, property,
+                                             withTests, (===))
+import           System.Process             (callCommand)
+
+import           Audit.Database             (Auditor, AuditorT (..), Diff,
                                              DiffT (..), buildPackageList,
                                              clearAuditorTable, clearDiffTable,
                                              deleteHash, insertDeps,
@@ -21,16 +27,13 @@ import           Database                   (Auditor, AuditorT (..), Diff,
                                              queryAuditorRemovedDeps, queryDiff,
                                              queryDiff', queryDiffRemovedDeps,
                                              updateDiffTableDirectDeps)
-import           Hedgehog
-import           Hedgehog.Internal.Property (Property, assert, forAll, property,
-                                             withTests, (===))
-import           System.Process             (callCommand)
-import           Test.Gen                   (genNameVersions, genPackage,
+import           Audit.Tree                 (buildDepTree, directDeps,
+                                             indirectDeps)
+import           Audit.Types                (Package (..))
+
+import           Test.Audit.Gen             (genNameVersions, genPackage,
                                              genRemovedPackage,
                                              genSimpleDepList)
-import           Tree                       (buildDepTree, directDeps,
-                                             indirectDeps)
-import           Types                      (Package (..))
 
 -- | Makes sure that no information is lost in `buildPackageList`
 prop_buildPackageList :: Property

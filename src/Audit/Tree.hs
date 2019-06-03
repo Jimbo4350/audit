@@ -1,4 +1,4 @@
-module Tree
+module Audit.Tree
        ( buildDepTree
        , deconstructDepTree
        , depTreeLevel

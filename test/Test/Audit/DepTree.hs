@@ -1,15 +1,15 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module Test.DepTree where
+module Test.Audit.DepTree where
 
 import           Control.Monad.IO.Class
 import           Data.List                  (sort, nub)
 import           Hedgehog
 import           Hedgehog.Internal.Property (Property, forAll, property,
                                              withTests, (===))
-import           Sorting                    (allInitialDepsGrouped, repoName)
-import           Test.Gen                   (genSimpleDepList)
-import           Tree                       (buildDepTree, deconstructDepTree)
+import           Audit.Sorting              (allInitialDepsGrouped, repoName)
+import           Audit.Tree                 (buildDepTree, deconstructDepTree)
+import           Test.Audit.Gen             (genSimpleDepList)
 
 
 prop_simpleDeptree_construction_deconstruction :: Property

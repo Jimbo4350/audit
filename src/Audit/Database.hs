@@ -6,7 +6,7 @@
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeSynonymInstances  #-}
 
-module Database
+module Audit.Database
        ( Auditor
        , AuditorT (..)
        , buildPackageList
@@ -61,8 +61,9 @@ import           Database.Beam.Query                        (lookup_, runSelectR
 import           Database.Beam.Sqlite
 import           Database.SQLite.Simple                     (close, open)
 import           Database.SQLite.Simple.Time.Implementation (parseUTCTime)
-import           Sorting                                    (removedDeps)
-import           Types                                      (DirectDependency,
+
+import           Audit.Sorting                              (removedDeps)
+import           Audit.Types                                (DirectDependency,
                                                              HashStatus (..),
                                                              IndirectDependency,
                                                              Package (..),
