@@ -1,4 +1,4 @@
-module Parser
+module Audit.Parser
        ( allDependencies
        , digraphRemoval
        , getCommand
@@ -15,7 +15,8 @@ import           Data.List           (concat, intercalate)
 import           Data.Semigroup      ((<>))
 import           Options.Applicative (Parser, help, long, metavar, strOption)
 import           Text.Parsec
-import           Types               (Command (..), PackageName, Version)
+
+import           Audit.Types         (Command (..), PackageName, Version)
 
 -- | Returns name of the repo.
 packageName' :: Parsec String () String

@@ -1,14 +1,21 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 
-module Test.TempDatabase where
+module Test.Audit.TempDatabase where
 
+import           Control.Exception (bracket_)
 import           Control.Monad.IO.Class
 import           Data.Bifunctor             (bimap)
 import           Data.List                  (all, sort)
 import           Data.Text                  (pack, unpack)
 import           Data.Time.Format           (defaultTimeLocale, formatTime)
-import           Database                   (Auditor, AuditorT (..), Diff,
+
+import           Hedgehog
+import           Hedgehog.Internal.Property (Property, assert, forAll, property,
+                                             withTests, (===))
+import           System.Process             (callCommand)
+
+import           Audit.Database             (Auditor, AuditorT (..), Diff,
                                              DiffT (..), buildPackageList,
                                              clearAuditorTable, clearDiffTable,
                                              deleteHash, insertDeps,
@@ -21,16 +28,13 @@ import           Database                   (Auditor, AuditorT (..), Diff,
                                              queryAuditorRemovedDeps, queryDiff,
                                              queryDiff', queryDiffRemovedDeps,
                                              updateDiffTableDirectDeps)
-import           Hedgehog
-import           Hedgehog.Internal.Property (Property, assert, forAll, property,
-                                             withTests, (===))
-import           System.Process             (callCommand)
-import           Test.Gen                   (genNameVersions, genPackage,
+import           Audit.Tree                 (buildDepTree, directDeps,
+                                             indirectDeps)
+import           Audit.Types                (Package (..))
+
+import           Test.Audit.Gen             (genNameVersions, genPackage,
                                              genRemovedPackage,
                                              genSimpleDepList)
-import           Tree                       (buildDepTree, directDeps,
-                                             indirectDeps)
-import           Types                      (Package (..))
 
 -- | Makes sure that no information is lost in `buildPackageList`
 prop_buildPackageList :: Property
@@ -336,25 +340,29 @@ tests = and <$> sequence
 -- Helpers
 ----------------------------------------------------------------------------
 
-tempDb :: IO ()
-tempDb =
-    callCommand "sqlite3 temp.db \
-    \\"CREATE TABLE auditor ( package_name VARCHAR NOT NULL\
-                           \, package_version VARCHAR NOT NULL\
-                           \, date_first_seen VARCHAR NOT NULL\
-                           \, direct_dep VARCHAR NOT NULL\
-                           \, still_used VARCHAR NOT NULL\
-                           \, analysis_status VARCHAR NOT NULL\
-                           \, PRIMARY KEY( package_name )); \
-     \CREATE TABLE hash ( dot_hash INT NOT NULL\
-                           \, PRIMARY KEY ( dot_hash )); \
-     \CREATE TABLE diff ( package_name VARCHAR NOT NULL\
-                           \, package_version VARCHAR NOT NULL\
-                           \, date_first_seen VARCHAR NOT NULL\
-                           \, direct_dep VARCHAR NOT NULL\
-                           \, still_used VARCHAR NOT NULL\
-                           \, analysis_status VARCHAR NOT NULL\
-                           \, PRIMARY KEY( package_name )); \""
+withTempDB :: IO a -> IO a
+withTempDB =
+    bracket_ tempDb remTempDb
+  where
+     tempDb :: IO ()
+     tempDb =
+         callCommand "sqlite3 temp.db \
+         \\"CREATE TABLE auditor ( package_name VARCHAR NOT NULL\
+                                \, package_version VARCHAR NOT NULL\
+                                \, date_first_seen VARCHAR NOT NULL\
+                                \, direct_dep VARCHAR NOT NULL\
+                                \, still_used VARCHAR NOT NULL\
+                                \, analysis_status VARCHAR NOT NULL\
+                                \, PRIMARY KEY( package_name )); \
+          \CREATE TABLE hash ( dot_hash INT NOT NULL\
+                                \, PRIMARY KEY ( dot_hash )); \
+          \CREATE TABLE diff ( package_name VARCHAR NOT NULL\
+                                \, package_version VARCHAR NOT NULL\
+                                \, date_first_seen VARCHAR NOT NULL\
+                                \, direct_dep VARCHAR NOT NULL\
+                                \, still_used VARCHAR NOT NULL\
+                                \, analysis_status VARCHAR NOT NULL\
+                                \, PRIMARY KEY( package_name )); \""
 
-remTempDb :: IO ()
-remTempDb = callCommand "rm temp.db"
+     remTempDb :: IO ()
+     remTempDb = callCommand "rm temp.db"

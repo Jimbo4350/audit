@@ -37,12 +37,12 @@ dependencies:
 library:
   source-dirs: src
   exposed-modules:
-  - Database
-  - Generate
-  - Parser
-  - Sorting
-  - Tree
-  - Types
+  - Audit.Database
+  - Audit.Generate
+  - Audit.Parser
+  - Audit.Sorting
+  - Audit.Tree
+  - Audit.Types
   ghc-options: -Wall
 
 executables:
@@ -61,9 +61,9 @@ tests:
     main:                test.hs
     source-dirs:         test
     other-modules:
-    - Test.DepTree
-    - Test.Gen
-    - Test.TempDatabase
+    - Test.Audit.DepTree
+    - Test.Audit.Gen
+    - Test.Audit.TempDatabase
     ghc-options:
     - -threaded
     - -rtsopts

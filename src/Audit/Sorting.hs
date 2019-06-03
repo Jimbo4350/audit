@@ -1,4 +1,4 @@
-module Sorting
+module Audit.Sorting
        ( allOriginalRepoDeps
        , allInitialDepsGrouped
        , allOriginalRepoIndirDeps
@@ -20,10 +20,11 @@ import           Data.Bifunctor (bimap)
 import           Data.List      (groupBy, nub, (\\))
 import           Data.Text      (Text, pack, unpack)
 import           Data.Tree      (Tree)
-import           Parser         (allDependencies, packageName', versions)
 import           Text.Parsec    (parse)
-import           Tree           (buildDepTree)
-import           Types          (DirectDependency, IndirectDependency,
+
+import           Audit.Parser   (allDependencies, packageName', versions)
+import           Audit.Tree     (buildDepTree)
+import           Audit.Types    (DirectDependency, IndirectDependency,
                                  PackageName, Version)
 
 allInitialDepsGrouped :: IO [(PackageName, [DirectDependency])]

@@ -1,4 +1,4 @@
-module Types
+module Audit.Types
        ( AnalysisStatus (..)
        , Command (..)
        , DirectDependency
