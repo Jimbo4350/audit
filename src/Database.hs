@@ -82,7 +82,6 @@ data AuditorT f = Auditor
     } deriving Generic
 
 type Auditor = AuditorT Identity
-type AuditorPackageName = PrimaryKey AuditorT Identity
 
 deriving instance Eq Auditor
 deriving instance Show Auditor
@@ -103,7 +102,6 @@ data HashT f = Hash
     } deriving Generic
 
 type Hash = HashT Identity
-type HashDotHash = PrimaryKey HashT Identity
 
 deriving instance Eq Hash
 deriving instance Show Hash
@@ -129,7 +127,6 @@ data DiffT f = Diff
     } deriving Generic
 
 type Diff = DiffT Identity
-type DiffPackageName = PrimaryKey DiffT Identity
 
 deriving instance Eq Diff
 deriving instance Show Diff

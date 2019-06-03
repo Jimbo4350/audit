@@ -88,8 +88,8 @@ audit = do
                 pVersions <- allUpdatedRepoVers
                 dDeps <- newDirDeps
                 newInDeps <- newIndirectDeps
-                updateDiffTableDirectDeps "auditor.db" <$> (buildPackageList pVersions dDeps [])
-                updateDiffTableIndirectDeps "auditor.db" <$> (buildPackageList pVersions [] newInDeps)
+                _ <- updateDiffTableDirectDeps "auditor.db" <$> (buildPackageList pVersions dDeps [])
+                _ <- updateDiffTableIndirectDeps "auditor.db" <$> (buildPackageList pVersions [] newInDeps)
                 updateDiffTableRemovedDeps "auditor.db"
             HashNotFound -> do
                 print "Hash not found, generating db."
