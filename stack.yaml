@@ -6,3 +6,4 @@ packages:
 extra-deps:
   - beam-sqlite-0.4.0.0
   - beam-migrate-0.4.0.1
+  - hedgehog-1.0
