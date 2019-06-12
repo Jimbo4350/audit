@@ -1,3 +1,5 @@
-.stack-work/
-audit.cabal
 *~
+auditor.db
+dist-newstyle/
+repoinfo/
+.stack-work/
