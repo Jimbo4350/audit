@@ -1,35 +1,50 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Test.Audit.Gen
-       ( genNameVersions
+       ( genHash
+       , genNameVersions
        , genPackage
        , genPackageName
        , genPackageVersion
        , genRemovedPackage
        , genSimpleDepList
+       , populateTempDb
        ) where
 
+import           Audit.Operations        (buildPackageList, insertDeps)
+import           Audit.Sorting          (groupParseResults)
+import           Audit.Tree             (buildDepTree, directDeps, indirectDeps)
+import           Audit.Types            (AnalysisStatus (..), Package (..))
 import qualified Data.Text
-import           Data.Time.Calendar (Day (..))
-import           Data.Time.Clock    (DiffTime (..), UTCTime (..),
-                                     secondsToDiffTime)
+import           Data.Time.Calendar     (Day (..))
+import           Data.Time.Clock        (DiffTime (..), UTCTime (..),
+                                         secondsToDiffTime)
+
+import           Control.Monad.IO.Class (liftIO)
 import           Hedgehog
-import qualified Hedgehog.Gen       as Gen
-import qualified Hedgehog.Range     as Range
-import           Audit.Sorting      (groupParseResults)
-import           Audit.Types        (AnalysisStatus (..), Package (..))
+import qualified Hedgehog.Gen           as Gen
+import           Hedgehog.Internal.Gen  (generalize)
+import qualified Hedgehog.Range         as Range
+
+
+genAnalysisStatus :: Gen [AnalysisStatus]
+genAnalysisStatus = Gen.list
+  (Range.singleton 1)
+  (Gen.element [ ASGhcBoot
+               , ASCommon
+               , ASCritical
+               , ASCrypto
+               , ASUncategoried
+               , ASNewDependency
+               ])
+
+genHash :: Gen Int
+genHash = Gen.int Range.constantBounded
 
 genNameVersions :: [String] -> Gen [(String,String)]
 genNameVersions pNames = do
     pVersions <- Gen.list (Range.constant 3 20) genPackageVersion
     pure $ zip pNames pVersions
-
-genSimpleDepList :: Gen [(String, [String])]
-genSimpleDepList = do
-    directDep <- genPackageName
-    indirectDep <- genPackageName
-    furthestDep <- genPackageName
-    pure $ groupParseResults [("MainRepository", directDep), (directDep, indirectDep), (indirectDep, furthestDep)]
 
 genPackageName :: Gen String
 genPackageName =
@@ -75,16 +90,30 @@ genRemovedPackage = do
                False
                aStat
 
-genAnalysisStatus :: Gen [AnalysisStatus]
-genAnalysisStatus = Gen.list (Range.singleton 1) (Gen.element [ ASGhcBoot
-                                                              , ASCommon
-                                                              , ASCritical
-                                                              , ASCrypto
-                                                              , ASUncategoried
-                                                              , ASNewDependency
-                                                              ])
+genSimpleDepList :: Gen [(String, [String])]
+genSimpleDepList = do
+    directDep <- genPackageName
+    indirectDep <- genPackageName
+    furthestDep <- genPackageName
+    pure $ groupParseResults [("MainRepository", directDep), (directDep, indirectDep), (indirectDep, furthestDep)]
+
+
 genUTCTime :: Gen UTCTime
 genUTCTime = do
     diffTime <- Gen.integral (Range.linear 0 1000000)
     day <- Gen.integral (Range.linear 0 1000000)
     pure $ UTCTime (ModifiedJulianDay day) (secondsToDiffTime diffTime)
+
+-- | Note this does not create the database.
+populateTempDb :: GenT IO [Package]
+populateTempDb = do
+  -- Generate packages with versions.
+  xs <- generalize genSimpleDepList
+  let dDeps = directDeps $ buildDepTree "MainRepository" xs
+  let inDeps = indirectDeps $ buildDepTree "MainRepository" xs
+  versions <- generalize $ genNameVersions (dDeps ++ inDeps)
+
+  -- Populate auditor table with initial deps.
+  packages <- liftIO $ buildPackageList versions dDeps inDeps
+  liftIO $ insertDeps "temp.db" packages
+  return packages

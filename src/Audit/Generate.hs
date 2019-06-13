@@ -11,12 +11,12 @@ import           Data.Text        (unpack)
 import           System.Directory (getDirectoryContents)
 import           System.Process   (callCommand)
 
-import           Audit.Database   (buildPackageList, checkHash, clearDiffTable,
-                                   deleteHash, insertDeps, insertHash,
-                                   loadDiffIntoAuditor, queryDiff',
+import           Audit.Operations (checkHash, clearDiffTable, deleteHash,
+                                   insertDeps, insertHash, loadDiffIntoAuditor,
                                    updateDiffTableDirectDeps,
                                    updateDiffTableIndirectDeps,
-                                   updateDiffTableRemovedDeps)
+                                   updateDiffTableRemovedDeps,buildPackageList)
+import           Audit.Queries    (queryDiff')
 import           Audit.Sorting    (allOriginalRepoVers, allUpdatedRepoVers,
                                    initialDepTree, newDirDeps, newIndirectDeps,
                                    newVersions, originalDirectDeps, removedDeps)
