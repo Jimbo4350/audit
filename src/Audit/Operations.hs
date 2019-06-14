@@ -12,6 +12,8 @@ module Audit.Operations
   , insertPackageDiff
   , insertRemovedDependencies
   , loadDiffIntoAuditor
+  , pkgToAuditor
+  , pkgToDiff
   , updateDiffTableDirectDeps
   , updateDiffTableIndirectDeps
   , updateDiffTableRemovedDeps
@@ -66,24 +68,14 @@ buildPackageList :: [(PackageName, Version)]
                  -> IO [Package]
 buildPackageList pVersions dDeps indirDeps = do
     cTime <- getCurrentTime
-    let directPackages = map (\x -> (Package
-                                 (pack x)
-                                 (lookupVersion x)
-                                 cTime
-                                 True
-                                 True
-                                 [])) dDeps
+    let directPackages = map (directPkg cTime) dDeps
+    let indirectPackages = map (indirectPkg cTime) indirDeps
 
-    let indirectPackages = map (\x -> (Package
-                                   (pack x)
-                                   (lookupVersion x)
-                                   cTime
-                                   False
-                                   True
-                                   [])) indirDeps
     return $ directPackages ++ indirectPackages
   where
     lookupVersion x = (pack $ fromMaybe "No version Found" (lookup x pVersions))
+    directPkg time x = Package (pack x) (lookupVersion x) time True True []
+    indirectPkg time x = Package (pack x) (lookupVersion x) time False True []
 
 pkgToAuditor :: Package -> Auditor
 pkgToAuditor (Package pName pVersion dateFS dDep sUsed aStatus) = do
@@ -107,7 +99,6 @@ pkgToDiff (Package pName pVersion dateFS dDep sUsed aStatus) = do
         (pack $ show sUsed)
         (pack $ show aStatus)
 
-
 ------------------- Auditor table Ops -------------------
 
 -- | Delete the dependencies in the auditor table.
@@ -124,13 +115,13 @@ clearAuditorTable fp = do
 deleteHash :: String -> IO ()
 deleteHash dbName = do
     conn <- open dbName
-    currentHash <- queryHash
-    case currentHash of
+    cHash <- queryHash dbName
+    case cHash of
         Just dbH ->  do
-            let dbHashInt = hashDotHash dbH
+            let dbHashInt = hashCurrentHash dbH
             runBeamSqlite conn $ runDelete $
                 delete (hash auditorDb)
-                    (\table -> hashDotHash table ==. val_ dbHashInt)
+                    (\table -> hashCurrentHash table ==. val_ dbHashInt)
         Nothing -> print ("Hash not found in database" :: String)
     close conn
 
@@ -146,12 +137,16 @@ insertDeps dbFilename pkgs = do
 
 -- | Takes a hash and inserts it into the Hash table.
 insertHash :: String -> Int -> IO ()
-insertHash dbFilename dotHash = do
-    conn <- open dbFilename
-    runBeamSqlite conn $ runInsert $
-        insert (hash auditorDb) $
-        insertValues [ Hash dotHash ]
-    close conn
+insertHash dbFilename dHash = do
+    curHash <- queryHash dbFilename
+    case curHash of
+        Just _ -> error $ "insertHash: A hash is already present in " ++ dbFilename
+        Nothing -> do
+          conn <- open dbFilename
+          runBeamSqlite conn $ runInsert $
+              insert (hash auditorDb) $
+              insertValues [ Hash dHash ]
+          close conn
 
 ------------------- Diff table Ops -------------------
 
@@ -360,12 +355,12 @@ updateOrModify (x:xs) = do
 
 
 -- | Takes a hash and compares it to the database hash.
-checkHash :: Int -> IO HashStatus
-checkHash testHash = do
-    entry <- queryHash
+checkHash :: String -> Int -> IO HashStatus
+checkHash dbName testHash = do
+    entry <- queryHash dbName
     case entry of
       Just dbH -> do
-          let dbHashInt = hashDotHash dbH
+          let dbHashInt = hashCurrentHash dbH
           if testHash == dbHashInt
               then liftIO $ return HashMatches
               else liftIO $ return HashDoesNotMatch

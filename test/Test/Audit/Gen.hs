@@ -8,6 +8,7 @@ module Test.Audit.Gen
        , genPackageVersion
        , genRemovedPackage
        , genSimpleDepList
+       , genUTCTime
        , populateTempDb
        ) where
 

@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Audit.Generate
        ( commandHandler
        , audit
@@ -38,7 +40,7 @@ checkDB = do
              callCommand "stack dot --external > repoinfo/updatedDepTree.dot"
              callCommand "stack ls dependencies > repoinfo/updatedDepTreeVersions.txt"
              contents <- (++) <$> readFile "repoinfo/updatedDepTree.dot" <*> readFile "repoinfo/updatedDepTreeVersions.txt"
-             checkHash $ hash contents
+             checkHash "auditor.db" $ hash contents
         else return HashNotFound
 
 generateInitialDepFiles :: IO ()
@@ -56,8 +58,8 @@ initializeDB =
                            \, still_used VARCHAR NOT NULL\
                            \, analysis_status VARCHAR NOT NULL\
                            \, PRIMARY KEY( package_name )); \
-     \CREATE TABLE hash ( dothash INT NOT NULL\
-                           \, PRIMARY KEY ( dothash )); \
+     \CREATE TABLE hash ( current_hash INT NOT NULL\
+                           \, PRIMARY KEY ( current_hash )); \
      \CREATE TABLE diff ( package_name VARCHAR NOT NULL\
                            \, package_version VARCHAR NOT NULL\
                            \, date_first_seen VARCHAR NOT NULL\

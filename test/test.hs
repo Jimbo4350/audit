@@ -4,12 +4,12 @@ import           System.Exit       (exitFailure)
 import           System.IO         (hSetEncoding, stderr, stdout, utf8)
 
 import qualified Test.Audit.DepTree
-import qualified Test.Audit.TempDatabase
+import qualified Test.Audit.Properties
 
 main :: IO ()
 main =
-    Test.Audit.TempDatabase.withTempDB $
+    Test.Audit.Properties.withTempDB $
         defaultMain
             [ Test.Audit.DepTree.tests
-            , Test.Audit.TempDatabase.tests
+            , Test.Audit.Properties.tests
             ]

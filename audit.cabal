@@ -86,7 +86,7 @@ test-suite audit-test
   other-modules:
       Test.Audit.DepTree
       Test.Audit.Gen
-      Test.Audit.TempDatabase
+      Test.Audit.Properties
   hs-source-dirs:
       test
   ghc-options: -threaded -rtsopts -with-rtsopts=-N

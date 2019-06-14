@@ -29,7 +29,7 @@ data AnalysisStatus
     | ASCrypto    -- A crypto related lib
     | ASUncategoried
     | ASNewDependency
-    deriving Show
+    deriving (Eq, Show, Read)
 
 -- | Tells us if the hash of the existing .dot file matches
 -- the hash of a newly generated .dot file or if the hash
