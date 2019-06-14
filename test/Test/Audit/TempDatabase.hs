@@ -3,38 +3,49 @@
 
 module Test.Audit.TempDatabase where
 
-import           Control.Exception (bracket_)
+import           Control.Exception          (bracket_)
 import           Control.Monad.IO.Class
 import           Data.Bifunctor             (bimap)
 import           Data.List                  (all, sort)
 import           Data.Text                  (pack, unpack)
 import           Data.Time.Format           (defaultTimeLocale, formatTime)
-
 import           Hedgehog
-import           Hedgehog.Internal.Property (Property, assert, forAll, property,
-                                             withTests, (===))
+import           Hedgehog.Internal.Property (Property, assert, failWith, forAll,
+                                             forAllT, property, withTests,
+                                             (===))
 import           System.Process             (callCommand)
 
 import           Audit.Database             (Auditor, AuditorT (..), Diff,
-                                             DiffT (..), buildPackageList,
+                                             DiffT (..), HashT (..))
+import           Audit.Operations           (buildPackageList,
                                              clearAuditorTable, clearDiffTable,
                                              deleteHash, insertDeps,
-                                             insertDiffDependencies,
+                                             insertDiffDependencies, insertHash,
                                              insertPackageDiff,
                                              insertRemovedDependencies,
-                                             loadDiffIntoAuditor, queryAuditor,
-                                             queryAuditorDepNames,
+                                             loadDiffIntoAuditor,
+                                             updateDiffTableDirectDeps)
+import           Audit.Queries              (queryAuditor, queryAuditorDepNames,
                                              queryAuditorDepVersions,
                                              queryAuditorRemovedDeps, queryDiff,
                                              queryDiff', queryDiffRemovedDeps,
-                                             updateDiffTableDirectDeps)
+                                             queryHash)
 import           Audit.Tree                 (buildDepTree, directDeps,
                                              indirectDeps)
 import           Audit.Types                (Package (..))
+import           Test.Audit.Gen             (genHash, genNameVersions,
+                                             genPackage, genRemovedPackage,
+                                             genSimpleDepList, populateTempDb)
 
-import           Test.Audit.Gen             (genNameVersions, genPackage,
-                                             genRemovedPackage,
-                                             genSimpleDepList)
+
+
+prop_clearAuditorTable :: Property
+prop_clearAuditorTable =
+    withTests 100 . property $ do
+        _ <- forAllT populateTempDb
+        liftIO $ clearAuditorTable "temp.db"
+        potentialValues <- liftIO $ queryAuditor "temp.db"
+        potentialValues === []
 
 -- | Makes sure that no information is lost in `buildPackageList`
 prop_buildPackageList :: Property
@@ -119,15 +130,7 @@ prop_version_change =
 prop_db_insert_initial_dependenciesauditor :: Property
 prop_db_insert_initial_dependenciesauditor =
     withTests 100 . property $ do
-        -- Generate packages with versions.
-        xs <- forAll genSimpleDepList
-        let dDeps = directDeps $ buildDepTree "MainRepository" xs
-        let inDeps = indirectDeps $ buildDepTree "MainRepository" xs
-        versions <- forAll $ genNameVersions (dDeps ++ inDeps)
-
-        -- Populate auditor table with initial deps.
-        packages <- liftIO $ buildPackageList versions dDeps inDeps
-        liftIO $ insertDeps "temp.db" packages
+        packages <- forAllT populateTempDb
 
         -- Query auditor table.
         queried <- liftIO $ queryAuditor "temp.db"

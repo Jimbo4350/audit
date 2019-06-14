@@ -27,7 +27,9 @@ library
   exposed-modules:
       Audit.Database
       Audit.Generate
+      Audit.Operations
       Audit.Parser
+      Audit.Queries
       Audit.Sorting
       Audit.Tree
       Audit.Types
