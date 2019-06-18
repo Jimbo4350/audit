@@ -10,20 +10,22 @@ import           Data.List                  (all, sort)
 import           Data.Text                  (pack, unpack)
 import           Data.Time.Format           (defaultTimeLocale, formatTime)
 import           Hedgehog
-import           Hedgehog.Internal.Property (Property, assert, failWith, forAll,
-                                             forAllT, property, withTests,
-                                             (===))
+import           Hedgehog.Internal.Property (Property, assert, evalEither,
+                                             failWith, forAll, forAllT,
+                                             property, withTests, (===))
 import           System.Process             (callCommand)
 
 import           Audit.Database             (Auditor, AuditorT (..), Diff,
                                              DiffT (..), HashT (..))
 import           Audit.Operations           (buildPackageList,
                                              clearAuditorTable, clearDiffTable,
-                                             deleteHash, insertDeps,
+                                             updateAuditorWithDiff, deleteHash,
+                                             insertAuditorDeps,
                                              insertDiffDependencies, insertHash,
                                              insertPackageDiff,
                                              insertRemovedDependencies,
-                                             loadDiffIntoAuditor, pkgToAuditor, pkgToDiff,
+                                             loadDiffIntoAuditor, pkgToAuditor,
+                                             pkgToDiff,
                                              updateDiffTableDirectDeps)
 import           Audit.Queries              (queryAuditor, queryAuditorDepNames,
                                              queryAuditorDepVersions,
@@ -35,14 +37,16 @@ import           Audit.Tree                 (buildDepTree, directDeps,
 import           Audit.Types                (Package (..))
 import           Test.Audit.Gen             (genHash, genNameVersions,
                                              genPackage, genRemovedPackage,
-                                             genSimpleDepList, populateTempDb)
+                                             genSimpleDepList,
+                                             populateAuditorTempDb,
+                                             populateDiffTempDb)
 
 
 
 prop_clearAuditorTable :: Property
 prop_clearAuditorTable =
     withTests 100 . property $ do
-        _ <- forAllT populateTempDb
+        _ <- forAllT populateAuditorTempDb
         liftIO $ clearAuditorTable "temp.db"
         potentialValues <- liftIO $ queryAuditor "temp.db"
         potentialValues === []
@@ -116,6 +120,7 @@ prop_pkgToDiff =
         stillUsed pkg === (read . unpack $ diffStillUsed diff)
         analysisStatus pkg === (read . unpack $ diffAnalysisStatus diff)
 
+-- | Insert a hash, query the hash from the db and test for equivalence.
 prop_insertQueryHash :: Property
 prop_insertQueryHash =
   withTests 100 . property $ do
@@ -124,8 +129,20 @@ prop_insertQueryHash =
     mHash <- liftIO $ queryHash "temp.db"
     liftIO $ deleteHash "temp.db"
     case mHash of
-      Just h -> hashCurrentHash h === testHash
+      Just h  -> hashCurrentHash h === testHash
       Nothing -> testHash === 0
+
+-- | Insert a hash, delete it and make sure the db is empty.
+prop_deleteHash :: Property
+prop_deleteHash =
+  withTests 100 . property $ do
+    testHash <- forAll genHash
+    liftIO $ insertHash "temp.db" testHash
+    liftIO $ deleteHash "temp.db"
+    mHash <- liftIO $ queryHash "temp.db"
+    case mHash of
+      Just h  -> failWith Nothing $ "Hash still exists in the db: " ++ show h
+      Nothing -> assert True
 
 -- TODO: Need to distill out update or modify and loadDiffIntoAuditor
 {-
@@ -139,7 +156,7 @@ prop_version_change =
         let inDeps = indirectDeps $ buildDepTree "MainRepository" initial
         versions <- forAll $ genNameVersions (dDeps ++ inDeps)
         packages <- liftIO $ buildPackageList versions dDeps inDeps
-        liftIO $ insertDeps "temp.db" packages
+        liftIO $ insertAuditorDeps "temp.db" packages
 
         -- Put new deps into diff table.
         new <- forAll genSimpleDepList
@@ -164,13 +181,14 @@ prop_version_change =
         --all (== True) tests === True
 -}
 
--- | Inserts direct and indirect dependencies into the database
--- via a `Tree`. It then compares what was inserted into the
+-- | Inserts direct and indirect dependencies into the auditor table.
+-- It then compares what was inserted into the
 -- database to what was queried from the database.
-prop_db_insert_initial_dependenciesauditor :: Property
-prop_db_insert_initial_dependenciesauditor =
+prop_insertAuditorDeps :: Property
+prop_insertAuditorDeps =
     withTests 100 . property $ do
-        packages <- forAllT populateTempDb
+        -- Uses 'insertAuditorDeps' to populate a the auditor table with 'Packages'
+        packages <- forAllT populateAuditorTempDb
 
         -- Query auditor table.
         queried <- liftIO $ queryAuditor "temp.db"
@@ -186,12 +204,31 @@ prop_db_insert_initial_dependenciesauditor =
         map auditorAnalysisStatus queried === map (pack . show . analysisStatus) packages
 
 
+prop_insertDiffDeps :: Property
+prop_insertDiffDeps =
+    withTests 100 . property $ do
+        -- Uses 'insertDiffDependencies' to populate a the diff table with 'Packages'
+        packages <- forAllT populateDiffTempDb
+
+        -- Query diff table.
+        queried <- liftIO $ queryDiff' "temp.db"
+        liftIO $ clearDiffTable "temp.db"
+
+        -- Compare generated `Package` with `Package` added to diff table.
+        map diffPackageName queried === map packageName packages
+        map diffPackageVersion queried === map packageVersion packages
+        let times = map (pack . formatTime defaultTimeLocale "%F %X%Q" . dateFirstSeen) packages
+        map diffDateFirstSeen queried === times
+        map diffDirectDep queried === map (pack . show . directDep) packages
+        map diffStillUsed queried === map (pack . show . stillUsed) packages
+        map diffAnalysisStatus queried === map (pack . show . analysisStatus) packages
+
 
 -- | Inserts direct and indirect dependencies into the diff table
 -- via a `Tree`. It then compares what was inserted into the
 -- diff table to what was queried from the database.
-prop_db_insertdiff_dependencies :: Property
-prop_db_insertdiff_dependencies =
+prop_db_insertDiffDependencies :: Property
+prop_db_insertDiffDependencies =
     withTests 100 . property $ do
         -- Populate auditor table with initial deps.
         initial <- forAll genSimpleDepList
@@ -199,7 +236,7 @@ prop_db_insertdiff_dependencies =
         let inDeps = indirectDeps $ buildDepTree "MainRepository" initial
         versions <- forAll $ genNameVersions (dDeps ++ inDeps)
         packages <- liftIO $ buildPackageList versions dDeps inDeps
-        liftIO $ insertDeps "temp.db" packages
+        liftIO $ insertAuditorDeps "temp.db" packages
 
         -- Put new deps into diff table.
         new <- forAll genSimpleDepList
@@ -239,7 +276,6 @@ prop_insertPackageDiff =
         -- Query diff table
         queried <- liftIO $ queryDiff' "temp.db"
         liftIO $ clearDiffTable "temp.db"
-        liftIO $ clearAuditorTable "temp.db"
 
         -- Compare generated `Package` with `Package` added to diff table.
         map diffPackageName queried === [packageName pkg]
@@ -249,6 +285,42 @@ prop_insertPackageDiff =
         map diffDirectDep queried === [pack . show $ directDep pkg]
         map diffStillUsed queried === [pack . show $ stillUsed pkg]
         map diffAnalysisStatus queried === [pack . show $ analysisStatus pkg]
+
+-- | When there is a detected change in the dependencies,
+-- this change is uploaded to the diff table as a Diff. We
+-- then update the Auditor table via 'updateAuditorWithDiff'.
+prop_updateAuditorWithDiff :: Property
+prop_updateAuditorWithDiff =
+    withTests 100 . property $ do
+        pkg@( Package
+               packageName
+               packageVersion
+               dateFirstSeen
+               directDep
+               stillUsed
+               analysisStatus
+            ) <- forAll genPackage
+        pkg'@( Package
+                packageName'
+                packageVersion'
+                dateFirstSeen'
+                directDep'
+                stillUsed'
+                analysisStatus'
+             ) <- forAll genPackage
+
+        -- The case where they are the same. This shouldn't happen (as only
+        -- dependency differences end up in the diff table) but
+        -- we test to be sure that the inputs are equivalent.
+        case updateAuditorWithDiff (pkgToDiff pkg) (pkgToAuditor pkg) of
+            Left err  -> failWith Nothing $ show err
+            Right aud -> aud === pkgToAuditor pkg
+
+        -- The case where they are different. Ensure the generated Auditor
+        -- matches the input Diff.
+        case updateAuditorWithDiff (pkgToDiff pkg') (pkgToAuditor pkg) of
+            Left err  -> failWith Nothing $ show err
+            Right aud' -> aud' === pkgToAuditor pkg'
 
 -- | Insert a `Package` from Diff table to Auditor table.
 -- Tests if the `Package` generated is the same as
@@ -294,11 +366,11 @@ prop_db_remove_dependencies =
         let inDeps = indirectDeps $ buildDepTree "MainRepository" initial
         versions <- forAll $ genNameVersions (dDeps ++ inDeps)
         packages <- liftIO $ buildPackageList versions dDeps inDeps
-        liftIO $ insertDeps "temp.db" packages
+        liftIO $ insertAuditorDeps "temp.db" packages
 
         -- Package to be removed
         pkg <- forAll genPackage
-        liftIO $ insertDeps "temp.db" [pkg]
+        liftIO $ insertAuditorDeps "temp.db" [pkg]
 
 
         -- Populate diff with removed dependencies
@@ -326,29 +398,7 @@ prop_db_remove_dependencies =
         --map auditorStillUsed remDeps === [pack . show $ directDep removedPkg]
         --map auditorAnalysisStatus remDeps === [pack . show $ analysisStatus removedPkg]
 -}
-prop_insertDeps :: Property
-prop_insertDeps =
-    withTests 100 . property $ do
-        -- Generate packages with versions.
-        xs <- forAll genSimpleDepList
-        let dDeps = directDeps $ buildDepTree "MainRepository" xs
-        let inDeps = indirectDeps $ buildDepTree "MainRepository" xs
-        versions <- forAll $ genNameVersions (dDeps ++ inDeps)
 
-        -- Populate auditor 'table with test deps.
-        packages <- liftIO $ buildPackageList versions dDeps inDeps
-        liftIO $ insertDeps "temp.db" packages
-
-        -- Query auditor table and compare the result to the generated dependencies.
-        queriedDeps <- liftIO $ queryAuditorDepNames "temp.db"
-        queriedVers <- liftIO $ queryAuditorDepVersions "temp.db"
-        liftIO $ clearAuditorTable "temp.db"
-        let tests = [ (==) (sort queriedDeps) (sort (map pack dDeps ++ map pack inDeps))
-                       -- Make sure versions match
-                    , (==) (sort $ zip (map unpack queriedDeps) (map unpack queriedVers)) (sort versions)
-                    ]
-        if all (== True) tests then assert True else assert False
--- TODO: Test other diff table update functions. Something is wrong and new packages are not being added to Diff table.
 prop_updateDiffTableDirectDeps :: Property
 prop_updateDiffTableDirectDeps =
     withTests 100 . property $ do
