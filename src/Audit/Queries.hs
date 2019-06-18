@@ -87,9 +87,9 @@ queryDiff' dbName = do
     return entries
 
 -- | Query and returns the hash in db.
-queryHash :: IO (Maybe Hash)
-queryHash = do
-    conn <- open "auditor.db"
+queryHash :: String -> IO (Maybe Hash)
+queryHash str = do
+    conn <- open str
     let allEntries = all_ (hash auditorDb)
     entry <- runBeamSqlite conn $
              runSelectReturningOne $ select allEntries

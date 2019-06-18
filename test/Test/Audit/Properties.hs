@@ -1,7 +1,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 
 
-module Test.Audit.TempDatabase where
+module Test.Audit.Properties where
 
 import           Control.Exception          (bracket_)
 import           Control.Monad.IO.Class
@@ -23,7 +23,7 @@ import           Audit.Operations           (buildPackageList,
                                              insertDiffDependencies, insertHash,
                                              insertPackageDiff,
                                              insertRemovedDependencies,
-                                             loadDiffIntoAuditor,
+                                             loadDiffIntoAuditor, pkgToAuditor, pkgToDiff,
                                              updateDiffTableDirectDeps)
 import           Audit.Queries              (queryAuditor, queryAuditorDepNames,
                                              queryAuditorDepVersions,
@@ -85,7 +85,47 @@ prop_buildPackageList =
         dDeps'' === dDeps
         inDeps'' === inDeps
 
+-- | Makes sure that no information is lost in `pkgToAuditor`
+prop_pkgToAuditor :: Property
+prop_pkgToAuditor =
+    withTests 100 . property $ do
+        pkg <- forAll genPackage
+        let auditor = pkgToAuditor pkg
 
+        -- Compare values of the 'Package' with the values
+        -- in 'Auditor'
+        packageName pkg === auditorPackageName auditor
+        packageVersion pkg === auditorPackageVersion auditor
+        (formatTime defaultTimeLocale "%F %X%Q" $ dateFirstSeen pkg) === (unpack $ auditorDateFirstSeen auditor)
+        directDep pkg === (read . unpack $ auditorDirectDep auditor)
+        stillUsed pkg === (read . unpack $ auditorStillUsed auditor)
+        analysisStatus pkg === (read . unpack $ auditorAnalysisStatus auditor)
+
+prop_pkgToDiff :: Property
+prop_pkgToDiff =
+    withTests 100 . property $ do
+        pkg <- forAll genPackage
+        let diff = pkgToDiff pkg
+
+        -- Compare values of the 'Package' with the values
+        -- in 'Auditor'
+        packageName pkg === diffPackageName diff
+        packageVersion pkg === diffPackageVersion diff
+        (formatTime defaultTimeLocale "%F %X%Q" $ dateFirstSeen pkg) === (unpack $ diffDateFirstSeen diff)
+        directDep pkg === (read . unpack $ diffDirectDep diff)
+        stillUsed pkg === (read . unpack $ diffStillUsed diff)
+        analysisStatus pkg === (read . unpack $ diffAnalysisStatus diff)
+
+prop_insertQueryHash :: Property
+prop_insertQueryHash =
+  withTests 100 . property $ do
+    testHash <- forAll genHash
+    liftIO $ insertHash "temp.db" testHash
+    mHash <- liftIO $ queryHash "temp.db"
+    liftIO $ deleteHash "temp.db"
+    case mHash of
+      Just h -> hashCurrentHash h === testHash
+      Nothing -> testHash === 0
 
 -- TODO: Need to distill out update or modify and loadDiffIntoAuditor
 {-
@@ -349,23 +389,23 @@ withTempDB =
   where
      tempDb :: IO ()
      tempDb =
-         callCommand "sqlite3 temp.db \
-         \\"CREATE TABLE auditor ( package_name VARCHAR NOT NULL\
-                                \, package_version VARCHAR NOT NULL\
-                                \, date_first_seen VARCHAR NOT NULL\
-                                \, direct_dep VARCHAR NOT NULL\
-                                \, still_used VARCHAR NOT NULL\
-                                \, analysis_status VARCHAR NOT NULL\
-                                \, PRIMARY KEY( package_name )); \
-          \CREATE TABLE hash ( dothash INT NOT NULL\
-                                \, PRIMARY KEY ( dothash )); \
-          \CREATE TABLE diff ( package_name VARCHAR NOT NULL\
-                                \, package_version VARCHAR NOT NULL\
-                                \, date_first_seen VARCHAR NOT NULL\
-                                \, direct_dep VARCHAR NOT NULL\
-                                \, still_used VARCHAR NOT NULL\
-                                \, analysis_status VARCHAR NOT NULL\
-                                \, PRIMARY KEY( package_name )); \""
+        callCommand "sqlite3 temp.db \
+        \\"CREATE TABLE auditor ( package_name VARCHAR NOT NULL\
+                               \, package_version VARCHAR NOT NULL\
+                               \, date_first_seen VARCHAR NOT NULL\
+                               \, direct_dep VARCHAR NOT NULL\
+                               \, still_used VARCHAR NOT NULL\
+                               \, analysis_status VARCHAR NOT NULL\
+                               \, PRIMARY KEY( package_name )); \
+         \CREATE TABLE hash ( current_hash INT NOT NULL\
+                               \, PRIMARY KEY ( current_hash )); \
+         \CREATE TABLE diff ( package_name VARCHAR NOT NULL\
+                               \, package_version VARCHAR NOT NULL\
+                               \, date_first_seen VARCHAR NOT NULL\
+                               \, direct_dep VARCHAR NOT NULL\
+                               \, still_used VARCHAR NOT NULL\
+                               \, analysis_status VARCHAR NOT NULL\
+                               \, PRIMARY KEY( package_name )); \""
 
      remTempDb :: IO ()
      remTempDb = callCommand "rm temp.db"

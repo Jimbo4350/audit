@@ -53,7 +53,7 @@ instance Beamable (PrimaryKey AuditorT)
 -- and .txt file.
 
 data HashT f = Hash
-  { hashDotHash :: Columnar f Int
+  { hashCurrentHash :: Columnar f Int
   } deriving Generic
 
 type Hash = HashT Identity
@@ -64,8 +64,8 @@ deriving instance Show Hash
 instance Beamable HashT
 
 instance Table HashT where
-  data PrimaryKey HashT f = HashDotHash (Columnar f Int) deriving Generic
-  primaryKey = HashDotHash . hashDotHash
+  data PrimaryKey HashT f = HashId (Columnar f Int) deriving Generic
+  primaryKey = HashId . hashCurrentHash
 
 instance Beamable (PrimaryKey HashT)
 
