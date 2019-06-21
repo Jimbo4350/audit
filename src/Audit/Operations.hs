@@ -5,19 +5,19 @@ module Audit.Operations
   , checkHash
   , clearAuditorTable
   , clearDiffTable
-  , updateAuditorWithDiff
+  , updateAuditorEntryWithDiff
   , deleteHash
   , insertAuditorDeps
-  , insertDiffDependencies
+  , loadDiffTable
   , insertHash
   , insertPackageDiff
   , insertRemovedDependencies
   , loadDiffIntoAuditor
   , pkgToAuditor
   , pkgToDiff
-  , updateDiffTableDirectDeps
-  , updateDiffTableIndirectDeps
-  , updateDiffTableRemovedDeps
+  , loadDiffTableDirectDeps
+  , loadDiffTableIndirectDeps
+  , loadDiffTableRemovedDeps
   ) where
 
 
@@ -186,8 +186,8 @@ insertPackageDiff dbFilename (Package pName pVersion dateFS dDep sUsed aStatus) 
 -- inYaml     = Bool signaling whether or not the dependencies you
 --              are still in use.
 
-insertDiffDependencies :: String -> [Package] -> IO ()
-insertDiffDependencies dbName pkgs = do
+loadDiffTable :: String -> [Package] -> IO ()
+loadDiffTable dbName pkgs = do
     let diffConversion = map pkgToDiff pkgs
     conn <- open dbName
     runBeamSqlite conn $ runInsert $
@@ -196,23 +196,23 @@ insertDiffDependencies dbName pkgs = do
     close conn
 
 -- | Inserts new direct dependencies into the diff table.
-updateDiffTableDirectDeps :: String -> [Package] -> IO ()
-updateDiffTableDirectDeps dbName pkgs = do
+loadDiffTableDirectDeps :: String -> [Package] -> IO ()
+loadDiffTableDirectDeps dbName pkgs = do
     depsInDiff <- queryDiff dbName
     if all (== False ) [packageName x `elem` depsInDiff | x <- pkgs]
-        then insertDiffDependencies dbName pkgs
+        then loadDiffTable dbName pkgs
         else print ("Already added new direct dependencies to the Diff table" :: String)
 
 -- | Inserts new indirect dependencies into the diff table.
-updateDiffTableIndirectDeps :: String -> [Package] -> IO ()
-updateDiffTableIndirectDeps dbName pkgs = do
+loadDiffTableIndirectDeps :: String -> [Package] -> IO ()
+loadDiffTableIndirectDeps dbName pkgs = do
     depsInDiff <- queryDiff dbName
     if all (== False ) [packageName x `elem` depsInDiff | x <- pkgs]
-        then insertDiffDependencies dbName pkgs
+        then loadDiffTable dbName pkgs
         else print ("Already added new indirect dependencies to the Diff table" :: String)
 
-updateDiffTableRemovedDeps :: String -> IO ()
-updateDiffTableRemovedDeps dbName = do
+loadDiffTableRemovedDeps :: String -> IO ()
+loadDiffTableRemovedDeps dbName = do
     rDeps <- removedDeps
     let rDepText = map pack rDeps -- TODO: Neaten this up
     depsInDiff <- queryDiff dbName
@@ -225,8 +225,8 @@ updateDiffTableRemovedDeps dbName = do
 
 -- | Compare an entry from the Diff table and Auditor table.
 -- Return an updated `Auditor` that will be inserted into the auditor table.
-updateAuditorWithDiff :: Diff -> Auditor -> Either Text Auditor
-updateAuditorWithDiff updatedDep aud = do
+updateAuditorEntryWithDiff :: Diff -> Auditor -> Either Text Auditor
+updateAuditorEntryWithDiff updatedDep aud = do
     let diffTextVals = map (\f -> f updatedDep) [ diffPackageName
                                                 , diffPackageVersion
                                                 , diffDateFirstSeen
@@ -342,7 +342,7 @@ updateOrModify (x:xs) = do
             case diffQresult of
                 Nothing -> updateOrModify xs
                 Just diffDep ->   -- Compare Diff and Audit query; return the updated dependency information
-                                  case updateAuditorWithDiff diffDep audDep of
+                                  case updateAuditorEntryWithDiff diffDep audDep of
                                       Left err -> error $ show err
                                       Right depToIns -> do
                                           runBeamSqlite conn $ runDelete $
