@@ -14,7 +14,7 @@ import           System.Directory (getDirectoryContents)
 import           System.Process   (callCommand)
 
 import           Audit.Operations (checkHash, clearDiffTable, deleteHash,
-                                   insertDeps, insertHash, loadDiffIntoAuditor,
+                                   insertAuditorDeps, insertHash, loadDiffIntoAuditor,
                                    updateDiffTableDirectDeps,
                                    updateDiffTableIndirectDeps,
                                    updateDiffTableRemovedDeps,buildPackageList)
@@ -102,7 +102,7 @@ audit = do
                 iDepTree <- initialDepTree
                 let pVersions' = [bimap unpack unpack x | x <- pVersions]
                 packages <- buildPackageList pVersions' (directDeps iDepTree) (indirectDeps iDepTree)
-                insertDeps "auditor.db" packages
+                insertAuditorDeps "auditor.db" packages
                 (++) <$> readFile "repoinfo/currentDepTree.dot"
                      <*> readFile "repoinfo/currentDepTreeVersions.txt" >>= insertHash "auditor.db" . hash
 

@@ -9,10 +9,12 @@ module Test.Audit.Gen
        , genRemovedPackage
        , genSimpleDepList
        , genUTCTime
-       , populateTempDb
+       , populateAuditorTempDb
+       , populateDiffTempDb
        ) where
 
-import           Audit.Operations        (buildPackageList, insertDeps)
+import           Audit.Operations       (buildPackageList, insertAuditorDeps,
+                                         insertDiffDependencies)
 import           Audit.Sorting          (groupParseResults)
 import           Audit.Tree             (buildDepTree, directDeps, indirectDeps)
 import           Audit.Types            (AnalysisStatus (..), Package (..))
@@ -106,8 +108,8 @@ genUTCTime = do
     pure $ UTCTime (ModifiedJulianDay day) (secondsToDiffTime diffTime)
 
 -- | Note this does not create the database.
-populateTempDb :: GenT IO [Package]
-populateTempDb = do
+populateAuditorTempDb :: GenT IO [Package]
+populateAuditorTempDb = do
   -- Generate packages with versions.
   xs <- generalize genSimpleDepList
   let dDeps = directDeps $ buildDepTree "MainRepository" xs
@@ -116,5 +118,19 @@ populateTempDb = do
 
   -- Populate auditor table with initial deps.
   packages <- liftIO $ buildPackageList versions dDeps inDeps
-  liftIO $ insertDeps "temp.db" packages
+  liftIO $ insertAuditorDeps "temp.db" packages
+  return packages
+
+  -- | Note this does not create the database.
+populateDiffTempDb :: GenT IO [Package]
+populateDiffTempDb = do
+  -- Generate packages with versions.
+  xs <- generalize genSimpleDepList
+  let dDeps = directDeps $ buildDepTree "MainRepository" xs
+  let inDeps = indirectDeps $ buildDepTree "MainRepository" xs
+  versions <- generalize $ genNameVersions (dDeps ++ inDeps)
+
+  -- Populate auditor table with initial deps.
+  packages <- liftIO $ buildPackageList versions dDeps inDeps
+  liftIO $ insertDiffDependencies "temp.db" packages
   return packages

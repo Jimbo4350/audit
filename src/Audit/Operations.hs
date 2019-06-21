@@ -5,8 +5,9 @@ module Audit.Operations
   , checkHash
   , clearAuditorTable
   , clearDiffTable
+  , updateAuditorWithDiff
   , deleteHash
-  , insertDeps
+  , insertAuditorDeps
   , insertDiffDependencies
   , insertHash
   , insertPackageDiff
@@ -126,8 +127,8 @@ deleteHash dbName = do
     close conn
 
 -- | Inserts original direct & indirect dependencies into auditor table.
-insertDeps :: String -> [Package] -> IO ()
-insertDeps dbFilename pkgs = do
+insertAuditorDeps :: String -> [Package] -> IO ()
+insertAuditorDeps dbFilename pkgs = do
     let auditorConversion = map pkgToAuditor pkgs
     conn <- open dbFilename
     runBeamSqlite conn $ runInsert $
@@ -223,18 +224,33 @@ updateDiffTableRemovedDeps dbName = do
 ----------------------- Involves Both Auditor and Diff ------------------
 
 -- | Compare an entry from the Diff table and Auditor table.
--- Return a modified `Auditor` that will be inserted into the auditor table.
-compareDiffAuditor :: Diff -> Auditor -> Maybe Auditor
-compareDiffAuditor (Diff _ dVersion _ _ diffStUsed _)
-                   (Auditor aPkgName aVersion aDateFSeen aDirDep aStUsed aStat) =
-    case (dVersion == aVersion, diffStUsed) of
-        -- The version has changed and the package is still used.
-        (False, "True") -> Just (Auditor aPkgName dVersion aDateFSeen aDirDep aStUsed aStat)
-        -- The version has not changed and the pakcage is no longer used.
-        (True, "False") -> Just (Auditor aPkgName aVersion aDateFSeen aDirDep "False" aStat)
-        -- The version has not changed and the package is still used.
-        (True, "True")  -> Just (Auditor aPkgName aVersion aDateFSeen aDirDep "True" aStat)
-        _               -> Nothing
+-- Return an updated `Auditor` that will be inserted into the auditor table.
+updateAuditorWithDiff :: Diff -> Auditor -> Either Text Auditor
+updateAuditorWithDiff updatedDep aud = do
+    let diffTextVals = map (\f -> f updatedDep) [ diffPackageName
+                                                , diffPackageVersion
+                                                , diffDateFirstSeen
+                                                , diffDirectDep
+                                                , diffStillUsed
+                                                , diffAnalysisStatus
+                                                ]
+
+    let audTextVals = map (\f -> f aud) [ auditorPackageName
+                                        , auditorPackageVersion
+                                        , auditorDateFirstSeen
+                                        , auditorDirectDep
+                                        , auditorStillUsed
+                                        , auditorAnalysisStatus
+                                        ]
+
+    let zipped = zip audTextVals diffTextVals
+
+    toAuditor [if audText == diffText then audText else diffText | (audText, diffText) <- zipped]
+  where
+    toAuditor :: [Text] -> Either Text Auditor
+    toAuditor [pName, pVer, dFs, dDep, sUsed, aStat] = Right $ Auditor pName pVer dFs dDep sUsed aStat
+    toAuditor _ = Left "toAuditor: The impossible happened, this should only yield a list of length 6"
+
 
 -- | Updates diff with removed dep. Queries auditor because
 -- after the dep is removed from the repository,
@@ -283,6 +299,7 @@ loadDiffIntoAuditor dbName = do
                                 runSelectReturningOne sqlQuery) diffDeps
     case all isNothing existingDeps of
         -- Inserts all the dependencies from the Diff table into the Auditor table
+        -- These are new dependencies
         True -> runBeamSqlite conn $ runInsert $
                     insert (auditor auditorDb) $
                         insertFrom $ do
@@ -294,6 +311,7 @@ loadDiffIntoAuditor dbName = do
                                           (diffStillUsed allEntries)
                                           (diffAnalysisStatus allEntries))
         -- There are deps in the Diff table that exists in the Auditor table
+        -- I.e this could be a version change
         _ -> updateOrModify diffDeps
     -- TODO: New plan, query the Auditor db with each of the "diffDeps". If it exists,
     -- pull all the fields and see what has changed. You need to copy the timestamp to Diff
@@ -324,9 +342,9 @@ updateOrModify (x:xs) = do
             case diffQresult of
                 Nothing -> updateOrModify xs
                 Just diffDep ->   -- Compare Diff and Audit query; return the updated dependency information
-                                  case compareDiffAuditor diffDep audDep of
-                                      Nothing -> error "Error in compareDiffAuditor: This should not happen"
-                                      Just depToIns -> do
+                                  case updateAuditorWithDiff diffDep audDep of
+                                      Left err -> error $ show err
+                                      Right depToIns -> do
                                           runBeamSqlite conn $ runDelete $
                                               delete (auditor auditorDb)
                                                   (\table -> auditorPackageName table ==. (val_ $ diffPackageName diffDep))
