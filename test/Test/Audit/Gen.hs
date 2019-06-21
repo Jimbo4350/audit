@@ -14,7 +14,7 @@ module Test.Audit.Gen
        ) where
 
 import           Audit.Operations       (buildPackageList, insertAuditorDeps,
-                                         insertDiffDependencies)
+                                         loadDiffTable)
 import           Audit.Sorting          (groupParseResults)
 import           Audit.Tree             (buildDepTree, directDeps, indirectDeps)
 import           Audit.Types            (AnalysisStatus (..), Package (..))
@@ -132,5 +132,5 @@ populateDiffTempDb = do
 
   -- Populate auditor table with initial deps.
   packages <- liftIO $ buildPackageList versions dDeps inDeps
-  liftIO $ insertDiffDependencies "temp.db" packages
+  liftIO $ loadDiffTable "temp.db" packages
   return packages
