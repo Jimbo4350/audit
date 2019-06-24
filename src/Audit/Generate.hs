@@ -7,23 +7,30 @@ module Audit.Generate
        , update
        ) where
 
-import           Data.Bifunctor   (bimap)
-import           Data.Hashable    (hash)
-import           Data.Text        (unpack)
-import           System.Directory (getDirectoryContents)
-import           System.Process   (callCommand)
+import           Control.Monad.Trans.Either (runEitherT)
+import           Data.Bifunctor             (bimap)
+import           Data.Hashable              (hash)
+import           Data.Text                  (unpack)
+import           System.Directory           (getDirectoryContents)
+import           System.Process             (callCommand)
 
-import           Audit.Operations (checkHash, clearDiffTable, deleteHash,
-                                   insertAuditorDeps, insertHash, loadDiffIntoAuditor,
-                                   loadNewDirDepsDiff,
-                                   loadNewDirDepsDiff,
-                                   loadDiffTableRemovedDeps,buildPackageList)
-import           Audit.Queries    (queryDiff')
-import           Audit.Sorting    (allOriginalRepoVers, allUpdatedRepoVers,
-                                   initialDepTree, newDirDeps, newIndirectDeps,
-                                   newVersions, originalDirectDeps, removedDeps)
-import           Audit.Tree       (directDeps, indirectDeps)
-import           Audit.Types      (Command (..), HashStatus (..))
+import           Audit.Operations           (buildPackageList, checkHash,
+                                             clearDiffTable, deleteHash,
+                                             insertAuditorDeps, insertHash,
+                                             loadDiffIntoAuditor,
+                                             loadDiffTableRemovedDeps,
+                                             loadNewDirDepsDiff,
+                                             loadNewIndirectDepsDiff)
+import           Audit.Queries              (queryDiff')
+import           Audit.Sorting              (allOriginalRepoVers,
+                                             allUpdatedRepoVers, initialDepTree,
+                                             newDirDeps, newIndirectDeps,
+                                             newVersions, originalDirectDeps,
+                                             removedDeps)
+import           Audit.Tree                 (directDeps, indirectDeps)
+import           Audit.Types                (Command (..), HashStatus (..),
+                                             OperationError (..))
+import           Data.Time.Clock            (getCurrentTime)
 
 -- | Checks if "auditor.db" exists in pwd, if not creates it with the
 -- tables `auditor` (which holds all the dependency data) and `hash`
@@ -91,8 +98,14 @@ audit = do
                 pVersions <- allUpdatedRepoVers
                 dDeps <- newDirDeps
                 newInDeps <- newIndirectDeps
-                _ <- loadNewDirDepsDiff "auditor.db" <$> (buildPackageList pVersions dDeps [])
-                _ <- loadNewDirDepsDiff "auditor.db" <$> (buildPackageList pVersions [] newInDeps)
+
+                cTime <- getCurrentTime
+                -- Add new direct dependencies to the Diff table
+                report =<< runEitherT (loadNewDirDepsDiff "auditor.db" $ buildPackageList pVersions dDeps [] cTime)
+
+                -- Add new indirect dependencies to the Diff table
+                report =<< runEitherT (loadNewIndirectDepsDiff "auditor.db" $ buildPackageList pVersions [] newInDeps cTime)
+
                 loadDiffTableRemovedDeps "auditor.db"
             HashNotFound -> do
                 print "Hash not found, generating db."
@@ -101,10 +114,20 @@ audit = do
                 pVersions <- allOriginalRepoVers
                 iDepTree <- initialDepTree
                 let pVersions' = [bimap unpack unpack x | x <- pVersions]
-                packages <- buildPackageList pVersions' (directDeps iDepTree) (indirectDeps iDepTree)
+                cTime <- getCurrentTime
+                let packages = buildPackageList pVersions' (directDeps iDepTree) (indirectDeps iDepTree) cTime
                 insertAuditorDeps "auditor.db" packages
                 (++) <$> readFile "repoinfo/currentDepTree.dot"
                      <*> readFile "repoinfo/currentDepTreeVersions.txt" >>= insertHash "auditor.db" . hash
+
+
+report :: Either OperationError () -> IO ()
+report (Right _) = pure ()
+report (Left e)  = putStrLn $ renderOperationError e
+
+renderOperationError :: OperationError -> String
+renderOperationError (OnlyDirectDepenciesAllowed pkgs) =  "The following packages are not direct dependencies: " <> show pkgs
+renderOperationError (OnlyIndirectDepenciesAllowed pkgs) =  "The following packages are not indirect dependencies: " <> show pkgs
 
 update :: IO ()
 update = do

@@ -37,17 +37,22 @@ import           Audit.Types                                (AnalysisStatus,
                                                              DirectDependency,
                                                              HashStatus (..),
                                                              IndirectDependency,
+                                                             OperationError (..),
                                                              Package (..),
                                                              PackageName,
+                                                             QPResult (..),
                                                              Version)
-import           Control.Monad                              (unless)
+import           Control.Monad.Trans.Either                 (EitherT,
+                                                             hoistEither
+                                                             )
 import           Data.Either                                (rights)
-import           Data.List                                  (all, find, (\\))
+import           Data.List                                  (all, find)
 import           Data.Maybe                                 (isNothing)
 import           Data.Maybe                                 (fromMaybe)
+import           Data.Set                                   (difference,
+                                                             fromList, toList)
 import           Data.Text                                  (Text, pack, unpack)
-import           Data.Time.Clock                            (UTCTime,
-                                                             getCurrentTime)
+import           Data.Time.Clock                            (UTCTime)
 import           Data.Time.Format                           (defaultTimeLocale,
                                                              formatTime)
 import           Database.Beam                              (all_, delete,
@@ -70,13 +75,14 @@ import           Database.SQLite.Simple.Time.Implementation (parseUTCTime)
 buildPackageList :: [(PackageName, Version)]
                  -> [DirectDependency]
                  -> [IndirectDependency]
-                 -> IO [Package]
-buildPackageList pVersions dDeps indirDeps = do
-    cTime <- getCurrentTime
-    let directPackages = map (directPkg cTime) dDeps
-    let indirectPackages = map (indirectPkg cTime) indirDeps
+                 -> UTCTime
+                 -> [Package]
+buildPackageList pVersions dDeps indirDeps currTime = do
 
-    return $ directPackages ++ indirectPackages
+    let directPackages = map (directPkg currTime) dDeps
+    let indirectPackages = map (indirectPkg currTime) indirDeps
+
+    directPackages ++ indirectPackages
   where
     lookupVersion x = (pack $ fromMaybe "No version Found" (lookup x pVersions))
     directPkg time x = Package (pack x) (lookupVersion x) time True True []
@@ -119,7 +125,7 @@ data ConversionError = UTCTimeParseError String
 diffDepToPackage :: Diff -> Either ConversionError Package
 diffDepToPackage diff =
     case diffDepToText diff of
-        [ pName, pVer, dateFirSeen, dirDep, stillUsed, aStat] -> do
+        [ pName, pVer, dateFirSeen, dirDep, stillUsed, _aStat] -> do
             case (parseUTCTime dateFirSeen) of
                 Left err -> Left $ UTCTimeParseError err
                 Right time -> Right $ createPackage pName pVer time (read $ unpack dirDep) (read $ unpack stillUsed) []
@@ -221,24 +227,36 @@ loadDiffTable dbName pkgs = do
     close conn
 
 -- | Inserts new direct dependencies into the diff table.
-loadNewDirDepsDiff :: String -> [Package] -> IO ()
+loadNewDirDepsDiff :: String -> [Package] -> EitherT OperationError IO ()
 loadNewDirDepsDiff dbName parsedDeps = do
-    unless (all ((True ==) . directDep) parsedDeps) (error "loadNewDirDepsDiff: Not all direct dependencies")
-    queriedDiffDeps <- queryDiff' dbName
+    dirDeps <- hoistEither $ checkAllAreDirectDeps parsedDeps
+    queriedDiffDeps <- liftIO $ queryDiff' dbName
     let queriedPkgs =  rights $ map diffDepToPackage queriedDiffDeps
-    case parseQueryDifference parsedDeps queriedPkgs of
-        QueryAndParseIdentical -> print ("Already added new direct dependencies to the Diff table" :: String)
-        QPDifference new -> loadDiffTable dbName new
+    case parseQueryDifference dirDeps queriedPkgs of
+        QueryAndParseIdentical -> liftIO $ print ("Already added new direct dependencies to the Diff table" :: String)
+        QPDifference new -> liftIO $ loadDiffTable dbName new
+
+checkAllAreDirectDeps :: [Package] -> Either OperationError [Package]
+checkAllAreDirectDeps pkgs =
+    if all ((True ==) . directDep) pkgs
+        then return pkgs
+        else Left . OnlyDirectDepenciesAllowed $ filter ((False ==) . directDep) pkgs
+
+checkAllAreIndirectDeps :: [Package] -> Either OperationError [Package]
+checkAllAreIndirectDeps pkgs =
+    if all ((False ==) . directDep) pkgs
+        then return pkgs
+        else Left . OnlyIndirectDepenciesAllowed $ filter ((True ==) . directDep) pkgs
 
 -- | Inserts new indirect dependencies into the diff table.
-loadNewIndirectDepsDiff :: String -> [Package] -> IO ()
+loadNewIndirectDepsDiff :: String -> [Package] -> EitherT OperationError IO ()
 loadNewIndirectDepsDiff dbName parsedDeps = do
-    unless (all ((False ==) . directDep) parsedDeps) (error "loadNewIndirectDepsDiff: Not all indirect dependencies")
-    queriedDiffDeps <- queryDiff' dbName
+    indirDeps <- hoistEither $ checkAllAreIndirectDeps parsedDeps
+    queriedDiffDeps <- liftIO $ queryDiff' dbName
     let queriedPkgs =  rights $ map diffDepToPackage queriedDiffDeps
-    case parseQueryDifference parsedDeps queriedPkgs of
-        QueryAndParseIdentical -> print ("Already added new direct dependencies to the Diff table" :: String)
-        QPDifference new -> loadDiffTable dbName new
+    case parseQueryDifference indirDeps queriedPkgs of
+        QueryAndParseIdentical -> liftIO $ print ("Already added new direct dependencies to the Diff table" :: String)
+        QPDifference new -> liftIO $ loadDiffTable dbName new
 
 loadDiffTableRemovedDeps :: String -> IO ()
 loadDiffTableRemovedDeps dbName = do
@@ -250,24 +268,16 @@ loadDiffTableRemovedDeps dbName = do
         -- TODO: Need to differentiate between direct and indirect removed deps
         else print ("Already added removed dependencies to the Diff table" :: String)
 
-
--- | 'QPResult a' captures the difference
--- between a database query of dependencies and
--- the dependencies from the parsing of
--- the '.dot' files in the repoinfo dir.
-data QPResult a =
-    QueryAndParseIdentical
-  | QPDifference [a]
-
-
 -- | Returns the associative difference of two lists.
 -- If the parsed dependencies differ from the database
 -- dependencies, we return the difference or a nullary constructor.
 parseQueryDifference :: (Eq a, Ord a) => [a] -> [a] -> QPResult a
 parseQueryDifference parsed queriedDeps
-  | parsed > queriedDeps = QPDifference $ parsed \\ queriedDeps
-  | parsed < queriedDeps = QPDifference $ queriedDeps \\ parsed
-  | otherwise            = QueryAndParseIdentical
+    | parsed == queriedDeps = QueryAndParseIdentical
+    | otherwise = QPDifference diff
+  where
+    diff = toList $ difference (fromList parsed) (fromList queriedDeps)
+
 
 ----------------------- Involves Both Auditor and Diff ------------------
 

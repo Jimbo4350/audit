@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell  #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 
 module Test.Audit.Properties where
@@ -8,6 +8,8 @@ import           Control.Monad.IO.Class
 import           Data.Bifunctor             (bimap)
 import           Data.List                  (all, sort)
 import           Data.Text                  (pack, unpack)
+import           Data.Time.Clock            (getCurrentTime)
+import           Control.Monad.Trans.Either  (runEitherT)
 import           Data.Time.Format           (defaultTimeLocale, formatTime)
 import           Database.SQLite.Simple     (SQLError)
 import           GHC.Stack                  (HasCallStack, withFrozenCallStack)
@@ -28,9 +30,9 @@ import           Audit.Operations           (buildPackageList,
                                              insertHash, insertPackageDiff,
                                              insertRemovedDependencies,
                                              loadDiffIntoAuditor, loadDiffTable,
-                                             pkgToAuditor, pkgToDiff,
-                                             updateAuditorEntryWithDiff,
-                                             loadNewDirDepsDiff)
+                                             loadNewDirDepsDiff, pkgToAuditor,
+                                             pkgToDiff,
+                                             updateAuditorEntryWithDiff)
 import           Audit.Queries              (queryAuditor, queryAuditorDepNames,
                                              queryAuditorDepVersions,
                                              queryAuditorRemovedDeps, queryDiff,
@@ -73,14 +75,15 @@ prop_buildPackageList =
         let inDeps = indirectDeps $ buildDepTree "MainRepository" xs
         versions <- forAll $ genNameVersions (dDeps ++ inDeps)
 
+        cTime <- liftIO $ getCurrentTime
         -- Build `Package` list
-        pkgs <- liftIO $ buildPackageList versions dDeps inDeps
+        let pkgs = buildPackageList versions dDeps inDeps cTime
 
         -- Build direct dependencies only
-        dirPkgs <- liftIO $ buildPackageList versions dDeps []
+        let dirPkgs = buildPackageList versions dDeps [] cTime
 
         -- Build direct dependencies only
-        indirPkgs <- liftIO $ buildPackageList versions [] inDeps
+        let indirPkgs = buildPackageList versions [] inDeps cTime
 
 
         -- Deconstruct `Packages`s to strings
@@ -167,7 +170,7 @@ prop_version_change =
         let dDeps = directDeps $ buildDepTree "MainRepository" initial
         let inDeps = indirectDeps $ buildDepTree "MainRepository" initial
         versions <- forAll $ genNameVersions (dDeps ++ inDeps)
-        packages <- liftIO $ buildPackageList versions dDeps inDeps
+        packages = buildPackageList versions dDeps inDeps
         liftIO $ insertAuditorDeps "temp.db" packages
 
         -- Put new deps into diff table.
@@ -175,7 +178,7 @@ prop_version_change =
         let newDirDeps = directDeps $ buildDepTree "MainRepository" new
         let newInDirDeps = indirectDeps $ buildDepTree "MainRepository" new
         newVersions <- forAll $ genNameVersions (newDirDeps ++ newInDirDeps)
-        newPkgs <- liftIO $ buildPackageList newVersions newDirDeps newInDirDeps
+        newPkgs = buildPackageList newVersions newDirDeps newInDirDeps
         liftIO $ loadDiffTable "temp.db" newPkgs
         --liftIO $ loadDiffTable "temp.db" <$> buildPackageList versions [] newInDirDeps
 
@@ -336,7 +339,7 @@ prop_db_remove_dependencies =
         let dDeps = directDeps $ buildDepTree "MainRepository" initial
         let inDeps = indirectDeps $ buildDepTree "MainRepository" initial
         versions <- forAll $ genNameVersions (dDeps ++ inDeps)
-        packages <- liftIO $ buildPackageList versions dDeps inDeps
+        packages = buildPackageList versions dDeps inDeps
         liftIO $ insertAuditorDeps "temp.db" packages
 
         -- Package to be removed
@@ -378,10 +381,15 @@ prop_loadNewDirDepsDiff =
     xs <- forAll genSimpleDepList
     let dDeps = directDeps $ buildDepTree "MainRepository" xs
     versions <- forAll $ genNameVersions dDeps
-    packages <- liftIO $ buildPackageList versions dDeps []
+
+    cTime <- liftIO $ getCurrentTime
+    let packages = buildPackageList versions dDeps [] cTime
 
     -- Insert direct deps into diff table
-    liftIO $ loadNewDirDepsDiff "temp.db" packages
+    checkDirDeps <- liftIO . runEitherT $ loadNewDirDepsDiff "temp.db" packages
+    case checkDirDeps of
+        Left err -> failWith Nothing $ show err
+        Right eff-> pure $ eff
 
     -- Query diff table
     queried <- liftIO $ queryDiff' "temp.db"
