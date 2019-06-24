@@ -15,8 +15,8 @@ import           System.Process   (callCommand)
 
 import           Audit.Operations (checkHash, clearDiffTable, deleteHash,
                                    insertAuditorDeps, insertHash, loadDiffIntoAuditor,
-                                   loadDiffTableDirectDeps,
-                                   loadDiffTableIndirectDeps,
+                                   loadNewDirDepsDiff,
+                                   loadNewDirDepsDiff,
                                    loadDiffTableRemovedDeps,buildPackageList)
 import           Audit.Queries    (queryDiff')
 import           Audit.Sorting    (allOriginalRepoVers, allUpdatedRepoVers,
@@ -91,8 +91,8 @@ audit = do
                 pVersions <- allUpdatedRepoVers
                 dDeps <- newDirDeps
                 newInDeps <- newIndirectDeps
-                _ <- loadDiffTableDirectDeps "auditor.db" <$> (buildPackageList pVersions dDeps [])
-                _ <- loadDiffTableIndirectDeps "auditor.db" <$> (buildPackageList pVersions [] newInDeps)
+                _ <- loadNewDirDepsDiff "auditor.db" <$> (buildPackageList pVersions dDeps [])
+                _ <- loadNewDirDepsDiff "auditor.db" <$> (buildPackageList pVersions [] newInDeps)
                 loadDiffTableRemovedDeps "auditor.db"
             HashNotFound -> do
                 print "Hash not found, generating db."

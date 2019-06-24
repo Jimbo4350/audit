@@ -15,8 +15,8 @@ module Audit.Operations
   , loadDiffIntoAuditor
   , pkgToAuditor
   , pkgToDiff
-  , loadDiffTableDirectDeps
-  , loadDiffTableIndirectDeps
+  , loadNewDirDepsDiff
+  , loadNewIndirectDepsDiff
   , loadDiffTableRemovedDeps
   ) where
 
@@ -33,17 +33,21 @@ import           Audit.Queries                              (queryAuditorDepName
                                                              queryDiff',
                                                              queryHash)
 import           Audit.Sorting                              (removedDeps)
-import           Audit.Types                                (DirectDependency,
+import           Audit.Types                                (AnalysisStatus,
+                                                             DirectDependency,
                                                              HashStatus (..),
                                                              IndirectDependency,
                                                              Package (..),
                                                              PackageName,
                                                              Version)
-import           Data.List                                  (all, find)
+import           Control.Monad                              (unless)
+import           Data.Either                                (rights)
+import           Data.List                                  (all, find, (\\))
 import           Data.Maybe                                 (isNothing)
 import           Data.Maybe                                 (fromMaybe)
 import           Data.Text                                  (Text, pack, unpack)
-import           Data.Time.Clock                            (getCurrentTime)
+import           Data.Time.Clock                            (UTCTime,
+                                                             getCurrentTime)
 import           Data.Time.Format                           (defaultTimeLocale,
                                                              formatTime)
 import           Database.Beam                              (all_, delete,
@@ -78,6 +82,16 @@ buildPackageList pVersions dDeps indirDeps = do
     directPkg time x = Package (pack x) (lookupVersion x) time True True []
     indirectPkg time x = Package (pack x) (lookupVersion x) time False True []
 
+createPackage :: Text -> Text -> UTCTime -> Bool -> Bool -> [AnalysisStatus] -> Package
+createPackage pName pVer dateFirSeen dirDep stillUsed aStat =
+    Package
+      pName
+      pVer
+      dateFirSeen
+      dirDep
+      stillUsed
+      aStat
+
 pkgToAuditor :: Package -> Auditor
 pkgToAuditor (Package pName pVersion dateFS dDep sUsed aStatus) = do
     let fTime = formatTime defaultTimeLocale "%F %X%Q" dateFS
@@ -100,6 +114,16 @@ pkgToDiff (Package pName pVersion dateFS dDep sUsed aStatus) = do
         (pack $ show sUsed)
         (pack $ show aStatus)
 
+data ConversionError = UTCTimeParseError String
+
+diffDepToPackage :: Diff -> Either ConversionError Package
+diffDepToPackage diff =
+    case diffDepToText diff of
+        [ pName, pVer, dateFirSeen, dirDep, stillUsed, aStat] -> do
+            case (parseUTCTime dateFirSeen) of
+                Left err -> Left $ UTCTimeParseError err
+                Right time -> Right $ createPackage pName pVer time (read $ unpack dirDep) (read $ unpack stillUsed) []
+        _ -> error "diffDepToPackage: An additional column was added to the Diff table, please account for it here"
 ------------------- Auditor table Ops -------------------
 
 -- | Delete the dependencies in the auditor table.
@@ -186,6 +210,7 @@ insertPackageDiff dbFilename (Package pName pVersion dateFS dDep sUsed aStatus) 
 -- inYaml     = Bool signaling whether or not the dependencies you
 --              are still in use.
 
+-- | Load a list of 'Package's into the Diff table.
 loadDiffTable :: String -> [Package] -> IO ()
 loadDiffTable dbName pkgs = do
     let diffConversion = map pkgToDiff pkgs
@@ -196,20 +221,24 @@ loadDiffTable dbName pkgs = do
     close conn
 
 -- | Inserts new direct dependencies into the diff table.
-loadDiffTableDirectDeps :: String -> [Package] -> IO ()
-loadDiffTableDirectDeps dbName pkgs = do
-    depsInDiff <- queryDiff dbName
-    if all (== False ) [packageName x `elem` depsInDiff | x <- pkgs]
-        then loadDiffTable dbName pkgs
-        else print ("Already added new direct dependencies to the Diff table" :: String)
+loadNewDirDepsDiff :: String -> [Package] -> IO ()
+loadNewDirDepsDiff dbName parsedDeps = do
+    unless (all ((True ==) . directDep) parsedDeps) (error "loadNewDirDepsDiff: Not all direct dependencies")
+    queriedDiffDeps <- queryDiff' dbName
+    let queriedPkgs =  rights $ map diffDepToPackage queriedDiffDeps
+    case parseQueryDifference parsedDeps queriedPkgs of
+        QueryAndParseIdentical -> print ("Already added new direct dependencies to the Diff table" :: String)
+        QPDifference new -> loadDiffTable dbName new
 
 -- | Inserts new indirect dependencies into the diff table.
-loadDiffTableIndirectDeps :: String -> [Package] -> IO ()
-loadDiffTableIndirectDeps dbName pkgs = do
-    depsInDiff <- queryDiff dbName
-    if all (== False ) [packageName x `elem` depsInDiff | x <- pkgs]
-        then loadDiffTable dbName pkgs
-        else print ("Already added new indirect dependencies to the Diff table" :: String)
+loadNewIndirectDepsDiff :: String -> [Package] -> IO ()
+loadNewIndirectDepsDiff dbName parsedDeps = do
+    unless (all ((False ==) . directDep) parsedDeps) (error "loadNewIndirectDepsDiff: Not all indirect dependencies")
+    queriedDiffDeps <- queryDiff' dbName
+    let queriedPkgs =  rights $ map diffDepToPackage queriedDiffDeps
+    case parseQueryDifference parsedDeps queriedPkgs of
+        QueryAndParseIdentical -> print ("Already added new direct dependencies to the Diff table" :: String)
+        QPDifference new -> loadDiffTable dbName new
 
 loadDiffTableRemovedDeps :: String -> IO ()
 loadDiffTableRemovedDeps dbName = do
@@ -221,19 +250,32 @@ loadDiffTableRemovedDeps dbName = do
         -- TODO: Need to differentiate between direct and indirect removed deps
         else print ("Already added removed dependencies to the Diff table" :: String)
 
+
+-- | 'QPResult a' captures the difference
+-- between a database query of dependencies and
+-- the dependencies from the parsing of
+-- the '.dot' files in the repoinfo dir.
+data QPResult a =
+    QueryAndParseIdentical
+  | QPDifference [a]
+
+
+-- | Returns the associative difference of two lists.
+-- If the parsed dependencies differ from the database
+-- dependencies, we return the difference or a nullary constructor.
+parseQueryDifference :: (Eq a, Ord a) => [a] -> [a] -> QPResult a
+parseQueryDifference parsed queriedDeps
+  | parsed > queriedDeps = QPDifference $ parsed \\ queriedDeps
+  | parsed < queriedDeps = QPDifference $ queriedDeps \\ parsed
+  | otherwise            = QueryAndParseIdentical
+
 ----------------------- Involves Both Auditor and Diff ------------------
 
 -- | Compare an entry from the Diff table and Auditor table.
 -- Return an updated `Auditor` that will be inserted into the auditor table.
 updateAuditorEntryWithDiff :: Diff -> Auditor -> Either Text Auditor
 updateAuditorEntryWithDiff updatedDep aud = do
-    let diffTextVals = map (\f -> f updatedDep) [ diffPackageName
-                                                , diffPackageVersion
-                                                , diffDateFirstSeen
-                                                , diffDirectDep
-                                                , diffStillUsed
-                                                , diffAnalysisStatus
-                                                ]
+    let diffTextVals = diffDepToText updatedDep
 
     let audTextVals = map (\f -> f aud) [ auditorPackageName
                                         , auditorPackageVersion
@@ -251,6 +293,17 @@ updateAuditorEntryWithDiff updatedDep aud = do
     toAuditor [pName, pVer, dFs, dDep, sUsed, aStat] = Right $ Auditor pName pVer dFs dDep sUsed aStat
     toAuditor _ = Left "toAuditor: The impossible happened, this should only yield a list of length 6"
 
+diffDepToText :: Diff -> [Text]
+diffDepToText diffDep =
+    map
+      (\f -> f diffDep)
+      [ diffPackageName
+      , diffPackageVersion
+      , diffDateFirstSeen
+      , diffDirectDep
+      , diffStillUsed
+      , diffAnalysisStatus
+      ]
 
 -- | Updates diff with removed dep. Queries auditor because
 -- after the dep is removed from the repository,
