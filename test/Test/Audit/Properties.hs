@@ -30,7 +30,7 @@ import           Audit.Operations           (buildPackageList,
                                              loadDiffIntoAuditor, loadDiffTable,
                                              pkgToAuditor, pkgToDiff,
                                              updateAuditorEntryWithDiff,
-                                             loadDiffTableDirectDeps)
+                                             loadNewDirDepsDiff)
 import           Audit.Queries              (queryAuditor, queryAuditorDepNames,
                                              queryAuditorDepVersions,
                                              queryAuditorRemovedDeps, queryDiff,
@@ -229,11 +229,11 @@ prop_loadDiffTable :: Property
 prop_loadDiffTable =
     withTests 100 . property $ do
         -- Populate auditor table with initial deps.
-        packages <- forAll $ Gen.list (Range.constant 0 100) genPackage
+        packages <- forAll $ Gen.list (Range.linear 0 50) genPackage
         liftIO $ insertAuditorDeps "temp.db" packages
 
         -- Put new deps into diff table.
-        newPkgs <- forAll $ Gen.list (Range.constant 0 100) genPackage
+        newPkgs <- forAll $ Gen.list (Range.linear 0 50) genPackage
         liftIO $ loadDiffTable "temp.db" newPkgs
 
         -- Update auditor table with the new direct dependencies.
@@ -370,8 +370,8 @@ prop_db_remove_dependencies =
         --map auditorAnalysisStatus remDeps === [pack . show $ analysisStatus removedPkg]
 -}
 
-prop_loadDiffTableDirectDeps :: Property
-prop_loadDiffTableDirectDeps =
+prop_loadNewDirDepsDiff :: Property
+prop_loadNewDirDepsDiff =
     withTests 100 . property $ do
 
     -- Generate direct deps
@@ -381,7 +381,7 @@ prop_loadDiffTableDirectDeps =
     packages <- liftIO $ buildPackageList versions dDeps []
 
     -- Insert direct deps into diff table
-    liftIO $ loadDiffTableDirectDeps "temp.db" packages
+    liftIO $ loadNewDirDepsDiff "temp.db" packages
 
     -- Query diff table
     queried <- liftIO $ queryDiff' "temp.db"

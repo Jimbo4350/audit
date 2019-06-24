@@ -19,7 +19,7 @@ data Package = Package
     , directDep      :: Bool
     , stillUsed      :: Bool
     , analysisStatus :: [AnalysisStatus]
-    } deriving Show
+    } deriving (Eq, Ord, Show)
 
 data AnalysisStatus
     = ASGhcBoot   -- Library is a GHC boot library shipped with GHC
@@ -29,7 +29,7 @@ data AnalysisStatus
     | ASCrypto    -- A crypto related lib
     | ASUncategoried
     | ASNewDependency
-    deriving (Eq, Show, Read)
+    deriving (Eq, Ord, Show, Read)
 
 -- | Tells us if the hash of the existing .dot file matches
 -- the hash of a newly generated .dot file or if the hash
