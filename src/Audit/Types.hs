@@ -4,8 +4,10 @@ module Audit.Types
        , DirectDependency
        , HashStatus (..)
        , IndirectDependency
+       , OperationError (..)
        , Package (..)
        , PackageName
+       , QPResult(..)
        , Version
        ) where
 
@@ -45,3 +47,19 @@ type Version = String
 type IndirectDependency = String
 type DirectDependency = String
 type PackageName = String
+
+-- | 'QPResult a' captures the difference
+-- between a database query of dependencies and
+-- the dependencies from the parsing of
+-- the '.dot' files in the repoinfo dir.
+data QPResult a =
+    QueryAndParseIdentical
+    -- ^ Database query and parse result are the same
+  | QPDifference [a]
+    -- ^ Database query and parse result are different
+  deriving Show
+
+data OperationError =
+   OnlyDirectDepenciesAllowed [Package]
+ | OnlyIndirectDepenciesAllowed [Package]
+ deriving Show

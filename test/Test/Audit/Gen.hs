@@ -21,7 +21,7 @@ import           Audit.Types            (AnalysisStatus (..), Package (..))
 import qualified Data.Text
 import           Data.Time.Calendar     (Day (..))
 import           Data.Time.Clock        (DiffTime (..), UTCTime (..),
-                                         secondsToDiffTime)
+                                         getCurrentTime, secondsToDiffTime)
 
 import           Control.Monad.IO.Class (liftIO)
 import           Hedgehog
@@ -117,7 +117,8 @@ populateAuditorTempDb = do
   versions <- generalize $ genNameVersions (dDeps ++ inDeps)
 
   -- Populate auditor table with initial deps.
-  packages <- liftIO $ buildPackageList versions dDeps inDeps
+  cTime <- liftIO $ getCurrentTime
+  let packages =  buildPackageList versions dDeps inDeps cTime
   liftIO $ insertAuditorDeps "temp.db" packages
   return packages
 
@@ -131,6 +132,7 @@ populateDiffTempDb = do
   versions <- generalize $ genNameVersions (dDeps ++ inDeps)
 
   -- Populate auditor table with initial deps.
-  packages <- liftIO $ buildPackageList versions dDeps inDeps
+  cTime <- liftIO $ getCurrentTime
+  let packages = buildPackageList versions dDeps inDeps cTime
   liftIO $ loadDiffTable "temp.db" packages
   return packages

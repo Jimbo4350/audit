@@ -25,6 +25,13 @@ packages:
       sha256: 6497b13b911abf9010705332467c744ac775fe79a3871b5b7743213fbedf2dc9
   original:
     hackage: hedgehog-1.0
+- completed:
+    hackage: transformers-either-0.1.1@sha256:ec3d6fefd90e243b51aecebfc0ebc5db6381c261d473ea2df7ed7b501a8fb961,1501
+    pantry-tree:
+      size: 317
+      sha256: a69c9cbc1d8340c63cc8a9bbd718e13a41869d30a7c84d27be94bbc04ad73a69
+  original:
+    hackage: transformers-either-0.1.1
 snapshots:
 - completed:
     size: 498402
