@@ -5,19 +5,21 @@ module Audit.Operations
   , checkHash
   , clearAuditorTable
   , clearDiffTable
-  , updateAuditorEntryWithDiff
+  , deleteAuditorEntry
   , deleteHash
+  , diffDepToPackage
   , insertAuditorDeps
-  , loadDiffTable
   , insertHash
   , insertPackageDiff
   , insertRemovedDependencies
-  , loadDiffIntoAuditor
-  , pkgToAuditor
-  , pkgToDiff
   , loadNewDirDepsDiff
   , loadNewIndirectDepsDiff
   , loadDiffTableRemovedDeps
+  , loadDiffTable
+  , loadDiffIntoAuditor
+  , pkgToAuditor
+  , pkgToDiff
+  , updateAuditorEntryWithDiff
   ) where
 
 
@@ -33,20 +35,20 @@ import           Audit.Queries                              (queryAuditorDepName
                                                              queryDiff',
                                                              queryHash)
 import           Audit.Sorting                              (removedDeps)
-import           Audit.Types                                (AnalysisStatus,
+import           Audit.Types                                (AnalysisStatus, ConversionError (..),
                                                              DirectDependency,
                                                              HashStatus (..),
                                                              IndirectDependency,
                                                              OperationError (..),
+                                                             OperationResult (..),
                                                              Package (..),
                                                              PackageName,
                                                              QPResult (..),
                                                              Version)
 import           Control.Monad.Trans.Either                 (EitherT,
-                                                             hoistEither
-                                                             )
+                                                             hoistEither)
 import           Data.Either                                (rights)
-import           Data.List                                  (all, find)
+import           Data.List                                  (all, find, sort)
 import           Data.Maybe                                 (isNothing)
 import           Data.Maybe                                 (fromMaybe)
 import           Data.Set                                   (difference,
@@ -68,7 +70,9 @@ import           Database.SQLite.Simple                     (close, open)
 import           Database.SQLite.Simple.Time.Implementation (parseUTCTime)
 
 
-------------------- Agnostic Ops -------------------
+--------------------------------------------------------------------------------
+-- Conversion Functions -- ALL TESTED
+--------------------------------------------------------------------------------
 
 -- | Build package/dependency list for the initialization of
 -- the database.
@@ -120,17 +124,28 @@ pkgToDiff (Package pName pVersion dateFS dDep sUsed aStatus) = do
         (pack $ show sUsed)
         (pack $ show aStatus)
 
-data ConversionError = UTCTimeParseError String
 
 diffDepToPackage :: Diff -> Either ConversionError Package
 diffDepToPackage diff =
     case diffDepToText diff of
-        [ pName, pVer, dateFirSeen, dirDep, stillUsed, _aStat] -> do
+        [ pName, pVer, dateFirSeen, dirDep, stillUsed, aStat] -> do
             case (parseUTCTime dateFirSeen) of
                 Left err -> Left $ UTCTimeParseError err
-                Right time -> Right $ createPackage pName pVer time (read $ unpack dirDep) (read $ unpack stillUsed) []
+                Right time -> Right $ createPackage pName pVer time (read $ unpack dirDep) (read $ unpack stillUsed) ((read $ unpack aStat) :: [AnalysisStatus])
         _ -> error "diffDepToPackage: An additional column was added to the Diff table, please account for it here"
-------------------- Auditor table Ops -------------------
+
+audDepToPackage :: Auditor -> Either ConversionError Package
+audDepToPackage diff =
+    case audDepToText diff of
+        [ pName, pVer, dateFirSeen, dirDep, stillUsed, aStat] -> do
+            case (parseUTCTime dateFirSeen) of
+                Left err -> Left $ UTCTimeParseError err
+                Right time -> Right $ createPackage pName pVer time (read $ unpack dirDep) (read $ unpack stillUsed) ((read $ unpack aStat) :: [AnalysisStatus])
+        _ -> error "diffDepToPackage: An additional column was added to the Diff table, please account for it here"
+
+--------------------------------------------------------------------------------
+-- Auditor Table Operations - All Tested
+--------------------------------------------------------------------------------
 
 -- | Delete the dependencies in the auditor table.
 clearAuditorTable :: String -> IO ()
@@ -156,6 +171,14 @@ deleteHash dbName = do
         Nothing -> print ("Hash not found in database" :: String)
     close conn
 
+deleteAuditorEntry :: String -> Auditor -> IO ()
+deleteAuditorEntry dbName aud = do
+    conn <- open dbName
+    runBeamSqlite conn $ runDelete $
+      delete (auditor auditorDb)
+          (\table -> auditorPackageName table ==. val_ (auditorPackageName aud))
+    close conn
+
 -- | Inserts original direct & indirect dependencies into auditor table.
 insertAuditorDeps :: String -> [Package] -> IO ()
 insertAuditorDeps dbFilename pkgs = do
@@ -179,7 +202,9 @@ insertHash dbFilename dHash = do
               insertValues [ Hash dHash ]
           close conn
 
-------------------- Diff table Ops -------------------
+--------------------------------------------------------------------------------
+-- Diff Table Operations - All Tested
+--------------------------------------------------------------------------------
 
 
 -- | Delete the dependencies in the diff table.
@@ -217,7 +242,9 @@ insertPackageDiff dbFilename (Package pName pVersion dateFS dDep sUsed aStatus) 
 --              are still in use.
 
 -- | Load a list of 'Package's into the Diff table.
-loadDiffTable :: String -> [Package] -> IO ()
+-- TODO: This can still throw an error from runBeamSqlite
+-- capture this in EitherT
+loadDiffTable :: String -> [Package] -> IO OperationResult
 loadDiffTable dbName pkgs = do
     let diffConversion = map pkgToDiff pkgs
     conn <- open dbName
@@ -225,38 +252,32 @@ loadDiffTable dbName pkgs = do
         insert (diff auditorDb) $
         insertValues diffConversion
     close conn
+    pure AddedDependenciesDiff
 
 -- | Inserts new direct dependencies into the diff table.
-loadNewDirDepsDiff :: String -> [Package] -> EitherT OperationError IO ()
+loadNewDirDepsDiff :: String -> [Package] -> EitherT OperationError IO OperationResult
 loadNewDirDepsDiff dbName parsedDeps = do
     dirDeps <- hoistEither $ checkAllAreDirectDeps parsedDeps
     queriedDiffDeps <- liftIO $ queryDiff' dbName
+    -- TODO: You are ignoring a potential failure here with rights
     let queriedPkgs =  rights $ map diffDepToPackage queriedDiffDeps
     case parseQueryDifference dirDeps queriedPkgs of
-        QueryAndParseIdentical -> liftIO $ print ("Already added new direct dependencies to the Diff table" :: String)
-        QPDifference new -> liftIO $ loadDiffTable dbName new
-
-checkAllAreDirectDeps :: [Package] -> Either OperationError [Package]
-checkAllAreDirectDeps pkgs =
-    if all ((True ==) . directDep) pkgs
-        then return pkgs
-        else Left . OnlyDirectDepenciesAllowed $ filter ((False ==) . directDep) pkgs
-
-checkAllAreIndirectDeps :: [Package] -> Either OperationError [Package]
-checkAllAreIndirectDeps pkgs =
-    if all ((False ==) . directDep) pkgs
-        then return pkgs
-        else Left . OnlyIndirectDepenciesAllowed $ filter ((True ==) . directDep) pkgs
+        QueryAndParseIdentical -> pure AlreadyAddedDependenciesDiff
+        QPDifference new -> do
+            _ <- liftIO $ loadDiffTable dbName new
+            pure AddedDependenciesDiff
 
 -- | Inserts new indirect dependencies into the diff table.
-loadNewIndirectDepsDiff :: String -> [Package] -> EitherT OperationError IO ()
+loadNewIndirectDepsDiff :: String -> [Package] -> EitherT OperationError IO OperationResult
 loadNewIndirectDepsDiff dbName parsedDeps = do
     indirDeps <- hoistEither $ checkAllAreIndirectDeps parsedDeps
     queriedDiffDeps <- liftIO $ queryDiff' dbName
     let queriedPkgs =  rights $ map diffDepToPackage queriedDiffDeps
     case parseQueryDifference indirDeps queriedPkgs of
-        QueryAndParseIdentical -> liftIO $ print ("Already added new direct dependencies to the Diff table" :: String)
-        QPDifference new -> liftIO $ loadDiffTable dbName new
+        QueryAndParseIdentical -> pure AddedDependenciesDiff
+        QPDifference new -> do
+            _ <- liftIO $ loadDiffTable dbName new
+            pure AddedDependenciesDiff
 
 loadDiffTableRemovedDeps :: String -> IO ()
 loadDiffTableRemovedDeps dbName = do
@@ -268,18 +289,9 @@ loadDiffTableRemovedDeps dbName = do
         -- TODO: Need to differentiate between direct and indirect removed deps
         else print ("Already added removed dependencies to the Diff table" :: String)
 
--- | Returns the associative difference of two lists.
--- If the parsed dependencies differ from the database
--- dependencies, we return the difference or a nullary constructor.
-parseQueryDifference :: (Eq a, Ord a) => [a] -> [a] -> QPResult a
-parseQueryDifference parsed queriedDeps
-    | parsed == queriedDeps = QueryAndParseIdentical
-    | otherwise = QPDifference diff
-  where
-    diff = toList $ difference (fromList parsed) (fromList queriedDeps)
-
-
------------------------ Involves Both Auditor and Diff ------------------
+--------------------------------------------------------------------------------
+-- Operations involving both Diff & Auditor tables.
+--------------------------------------------------------------------------------
 
 -- | Compare an entry from the Diff table and Auditor table.
 -- Return an updated `Auditor` that will be inserted into the auditor table.
@@ -296,28 +308,16 @@ updateAuditorEntryWithDiff updatedDep aud = do
                                         ]
 
     let zipped = zip audTextVals diffTextVals
-
-    toAuditor [if audText == diffText then audText else diffText | (audText, diffText) <- zipped]
+    toAuditor [if audText == diffText then audText else diffText | (audText, diffText) <- zipped] (auditorDateFirstSeen aud)
   where
-    toAuditor :: [Text] -> Either Text Auditor
-    toAuditor [pName, pVer, dFs, dDep, sUsed, aStat] = Right $ Auditor pName pVer dFs dDep sUsed aStat
-    toAuditor _ = Left "toAuditor: The impossible happened, this should only yield a list of length 6"
-
-diffDepToText :: Diff -> [Text]
-diffDepToText diffDep =
-    map
-      (\f -> f diffDep)
-      [ diffPackageName
-      , diffPackageVersion
-      , diffDateFirstSeen
-      , diffDirectDep
-      , diffStillUsed
-      , diffAnalysisStatus
-      ]
+    toAuditor :: [Text] -> Text -> Either Text Auditor
+    toAuditor [pName, pVer, _, dDep, sUsed, aStat] origDateFirstSeen = Right $ Auditor pName pVer origDateFirstSeen dDep sUsed aStat
+    toAuditor _ _ = Left "toAuditor: The impossible happened, this should only yield a list of length 6"
 
 -- | Updates diff with removed dep. Queries auditor because
 -- after the dep is removed from the repository,
 -- `stack ls dependencies` can no longer get the version.
+-- List of text is the list of dependency names
 insertRemovedDependencies :: String -> [Text] -> Bool -> Bool -> IO ()
 insertRemovedDependencies _ [] _ _ = pure ()
 insertRemovedDependencies dbFilename (x:xs) dirOrIndir inYaml = do
@@ -329,6 +329,7 @@ insertRemovedDependencies dbFilename (x:xs) dirOrIndir inYaml = do
         runSelectReturningOne sqlQuery
     -- Gets original time the package was first added.
     case audQresult of
+        -- Nothing branch should never match
         Nothing -> insertRemovedDependencies dbFilename xs dirOrIndir False
         Just result -> do
                          let dFSeen = auditorDateFirstSeen result
@@ -405,16 +406,17 @@ updateOrModify (x:xs) = do
             case diffQresult of
                 Nothing -> updateOrModify xs
                 Just diffDep ->   -- Compare Diff and Audit query; return the updated dependency information
-                                  case updateAuditorEntryWithDiff diffDep audDep of
-                                      Left err -> error $ show err
-                                      Right depToIns -> do
-                                          runBeamSqlite conn $ runDelete $
-                                              delete (auditor auditorDb)
-                                                  (\table -> auditorPackageName table ==. (val_ $ diffPackageName diffDep))
-                                          runBeamSqlite conn $ runInsert $
-                                              insert (auditor auditorDb) $
-                                              insertValues [ depToIns ]
-                                          updateOrModify xs
+
+                  case updateAuditorEntryWithDiff diffDep audDep of
+                    Left err -> error $ show err
+                    Right depToIns -> do
+                        runBeamSqlite conn $ runDelete $
+                            delete (auditor auditorDb)
+                                (\table -> auditorPackageName table ==. (val_ $ diffPackageName diffDep))
+                        runBeamSqlite conn $ runInsert $
+                            insert (auditor auditorDb) $
+                            insertValues [ depToIns ]
+                        updateOrModify xs
         -- New dependency to add to Auditor table.
         Nothing -> do
             diffList <- queryDiff' "auditor.db"
@@ -432,7 +434,9 @@ updateOrModify (x:xs) = do
                                                                (val_ $ diffAnalysisStatus matchedDep))
                                      updateOrModify xs
 
-------------------- Hash table operations -------------------
+--------------------------------------------------------------------------------
+-- Hash Table Operations
+--------------------------------------------------------------------------------
 
 
 -- | Takes a hash and compares it to the database hash.
@@ -446,3 +450,53 @@ checkHash dbName testHash = do
               then liftIO $ return HashMatches
               else liftIO $ return HashDoesNotMatch
       Nothing -> liftIO $ return HashNotFound
+
+--------------------------------------------------------------------------------
+-- Helpers
+--------------------------------------------------------------------------------
+
+checkAllAreDirectDeps :: [Package] -> Either OperationError [Package]
+checkAllAreDirectDeps pkgs =
+    if all ((True ==) . directDep) pkgs
+        then return pkgs
+        else Left . OnlyDirectDepenciesAllowed $ filter ((False ==) . directDep) pkgs
+
+checkAllAreIndirectDeps :: [Package] -> Either OperationError [Package]
+checkAllAreIndirectDeps pkgs =
+    if all ((False ==) . directDep) pkgs
+        then return pkgs
+        else Left . OnlyIndirectDepenciesAllowed $ filter ((True ==) . directDep) pkgs
+
+diffDepToText :: Diff -> [Text]
+diffDepToText diffDep =
+    map
+      (\f -> f diffDep)
+      [ diffPackageName
+      , diffPackageVersion
+      , diffDateFirstSeen
+      , diffDirectDep
+      , diffStillUsed
+      , diffAnalysisStatus
+      ]
+
+audDepToText :: Auditor -> [Text]
+audDepToText audDep =
+    map
+      (\f -> f audDep)
+      [ auditorPackageName
+      , auditorPackageVersion
+      , auditorDateFirstSeen
+      , auditorDirectDep
+      , auditorStillUsed
+      , auditorAnalysisStatus
+      ]
+
+-- | Returns the associative difference of two lists.
+-- If the parsed dependencies differ from the database
+-- dependencies, we return the difference or a nullary constructor.
+parseQueryDifference :: (Eq a, Ord a) => [a] -> [a] -> QPResult a
+parseQueryDifference parsed queriedDeps
+    | parsed == queriedDeps = QueryAndParseIdentical
+    | otherwise = QPDifference diff
+  where
+    diff = sort . toList $ difference (fromList parsed) (fromList queriedDeps)

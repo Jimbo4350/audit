@@ -83,6 +83,7 @@ data DiffT f = Diff
 
 type Diff = DiffT Identity
 
+deriving instance Ord Diff
 deriving instance Eq Diff
 deriving instance Show Diff
 

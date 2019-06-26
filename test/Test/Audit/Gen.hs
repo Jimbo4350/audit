@@ -1,7 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Test.Audit.Gen
-       ( genHash
+       ( genDirectPackage
+       , genIndirectPackage
+       , genHash
        , genNameVersions
        , genPackage
        , genPackageName
@@ -41,6 +43,40 @@ genAnalysisStatus = Gen.list
                , ASNewDependency
                ])
 
+-- | Generate a direct dependency
+genDirectPackage :: Gen Package
+genDirectPackage = do
+  pName <- genPackageName
+  pVersion <- genPackageVersion
+  pTime <- genUTCTime
+  dDep <- pure True
+  sUsed <- Gen.bool
+  aStat <- genAnalysisStatus
+  pure $ Package
+           (Data.Text.pack pName)
+           (Data.Text.pack pVersion)
+           pTime
+           dDep
+           sUsed
+           aStat
+
+-- | Generate an indirect dependency
+genIndirectPackage :: Gen Package
+genIndirectPackage = do
+  pName <- genPackageName
+  pVersion <- genPackageVersion
+  pTime <- genUTCTime
+  dDep <- pure False
+  sUsed <- Gen.bool
+  aStat <- genAnalysisStatus
+  pure $ Package
+           (Data.Text.pack pName)
+           (Data.Text.pack pVersion)
+           pTime
+           dDep
+           sUsed
+           aStat
+
 genHash :: Gen Int
 genHash = Gen.int Range.constantBounded
 
@@ -78,6 +114,7 @@ genPackage = do
                sUsed
                aStat
 
+
 genRemovedPackage :: Gen Package
 genRemovedPackage = do
     pName <- genPackageName
@@ -103,7 +140,7 @@ genSimpleDepList = do
 
 genUTCTime :: Gen UTCTime
 genUTCTime = do
-    diffTime <- Gen.integral (Range.linear 0 1000000)
+    diffTime <- Gen.integral (Range.linear 0 86401)
     day <- Gen.integral (Range.linear 0 1000000)
     pure $ UTCTime (ModifiedJulianDay day) (secondsToDiffTime diffTime)
 

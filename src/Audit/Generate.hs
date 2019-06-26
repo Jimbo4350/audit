@@ -29,7 +29,8 @@ import           Audit.Sorting              (allOriginalRepoVers,
                                              removedDeps)
 import           Audit.Tree                 (directDeps, indirectDeps)
 import           Audit.Types                (Command (..), HashStatus (..),
-                                             OperationError (..))
+                                             OperationError (..),
+                                             OperationResult (..))
 import           Data.Time.Clock            (getCurrentTime)
 
 -- | Checks if "auditor.db" exists in pwd, if not creates it with the
@@ -121,8 +122,8 @@ audit = do
                      <*> readFile "repoinfo/currentDepTreeVersions.txt" >>= insertHash "auditor.db" . hash
 
 
-report :: Either OperationError () -> IO ()
-report (Right _) = pure ()
+report :: Either OperationError OperationResult -> IO ()
+report (Right opRes) = putStrLn $ show opRes
 report (Left e)  = putStrLn $ renderOperationError e
 
 renderOperationError :: OperationError -> String
