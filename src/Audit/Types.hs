@@ -29,7 +29,10 @@ data AnalysisStatus
 
 newtype Command = Command String
 
-data ConversionError = UTCTimeParseError String deriving Show
+data ConversionError =
+     UTCTimeParseError String
+  |  DiffToAuditorError Text
+  deriving Show
 
 type DirectDependency = String
 
@@ -46,6 +49,7 @@ type IndirectDependency = String
 data OperationError =
    OnlyDirectDepenciesAllowed [Package]
  | OnlyIndirectDepenciesAllowed [Package]
+ | ConvError ConversionError
  deriving Show
 
 data OperationResult =
@@ -53,6 +57,12 @@ data OperationResult =
     -- ^ Already added dependencies to the Diff table.
   | AddedDependenciesDiff
     -- ^ Successfully added dependencies to the Diff table.
+  | NoDependenciesRemoved
+    -- ^ No dependencies have been removed.
+  | AddedRemovedDependenciesDiff
+    -- ^ Successfully added removed dependencies to the Diff table.
+  | AddedRemovedDependenciesAuditor
+    -- ^ Successfully added removed dependencies to the Auditor table.
   deriving Show
 
 data Package = Package

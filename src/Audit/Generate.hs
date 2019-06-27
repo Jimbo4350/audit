@@ -13,11 +13,13 @@ import           Data.Hashable              (hash)
 import           Data.Text                  (unpack)
 import           System.Directory           (getDirectoryContents)
 import           System.Process             (callCommand)
+import           Control.Monad.Trans.Either (runEitherT)
 
 import           Audit.Operations           (buildPackageList, checkHash,
                                              clearDiffTable, deleteHash,
                                              insertAuditorDeps, insertHash,
-                                             loadDiffIntoAuditor,
+                                             loadDiffIntoAuditorNew,
+                                             loadDiffIntoAuditorUpdate,
                                              loadDiffTableRemovedDeps,
                                              loadNewDirDepsDiff,
                                              loadNewIndirectDepsDiff)
@@ -138,7 +140,8 @@ update = do
         _ -> do
                   print "Inserting changes from Diff table into \
                         \Auditor table.."
-                  loadDiffIntoAuditor "auditor.db"
+                  _ <- runEitherT $ loadDiffIntoAuditorNew "auditor.db"
+                  _ <- runEitherT $ loadDiffIntoAuditorUpdate "auditor.db"
                   print "Overwriting original repository dependency \
                         \tree & clearing Diff table"
                   callCommand "stack dot --external > repoinfo/currentDepTree.dot"

@@ -24,7 +24,6 @@ import qualified Data.Text
 import           Data.Time.Calendar     (Day (..))
 import           Data.Time.Clock        (DiffTime (..), UTCTime (..),
                                          getCurrentTime, secondsToDiffTime)
-
 import           Control.Monad.IO.Class (liftIO)
 import           Hedgehog
 import qualified Hedgehog.Gen           as Gen
