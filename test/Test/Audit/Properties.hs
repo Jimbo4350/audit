@@ -3,67 +3,73 @@
 
 module Test.Audit.Properties where
 
-import           Control.Exception          (bracket_)
+import           Control.Exception                          (bracket_)
 import           Control.Monad.IO.Class
-import           Data.Bifunctor             (bimap)
-import           Data.List                  (all, sort)
-import           Data.Text                  (pack, unpack)
-import           Data.Time.Clock            (getCurrentTime)
-import           Control.Monad.Trans.Either  (runEitherT)
-import           Data.Time.Format           (defaultTimeLocale, formatTime)
-import           Database.SQLite.Simple     (SQLError)
-import           GHC.Stack                  (HasCallStack, withFrozenCallStack)
+import           Control.Monad.Trans.Either                 (runEitherT)
+import           Data.Bifunctor                             (bimap)
+import           Data.List                                  (all, sort)
+import           Data.Text                                  (pack, unpack)
+import           Data.Time.Clock                            (getCurrentTime)
+import           Data.Time.Format                           (defaultTimeLocale,
+                                                             formatTime)
+import           Database.SQLite.Simple                     (SQLError)
+import           GHC.Stack                                  (HasCallStack,
+                                                             withFrozenCallStack)
 import           Hedgehog
-import qualified Hedgehog.Gen               as Gen
-import           Hedgehog.Internal.Property (Property, TestLimit, assert,
-                                             evalEither, failWith, forAll,
-                                             forAllT, property, withTests,
-                                             (===))
-import qualified Hedgehog.Range             as Range
-import           System.Process             (callCommand)
+import qualified Hedgehog.Gen                               as Gen
+import           Hedgehog.Internal.Property                 (Property,
+                                                             TestLimit, assert,
+                                                             evalEither,
+                                                             failWith, forAll,
+                                                             forAllT, property,
+                                                             withTests, (===))
+import qualified Hedgehog.Range                             as Range
+import           System.Process                             (callCommand)
 
-import           Audit.Database             (Auditor, AuditorT (..), Diff,
-                                             DiffT (..), HashT (..))
-import           Audit.Operations           (buildPackageList,
-                                             clearAuditorTable, clearDiffTable,
-                                             deleteHash, insertAuditorDeps,
-                                             insertHash, insertPackageDiff,
-                                             insertRemovedDependencies,
-                                             loadDiffIntoAuditor, loadDiffTable,
-                                             loadNewDirDepsDiff, pkgToAuditor,
-                                             pkgToDiff,
-                                             updateAuditorEntryWithDiff)
-import           Audit.Queries              (queryAuditor, queryAuditorDepNames,
-                                             queryAuditorDepVersions,
-                                             queryAuditorRemovedDeps, queryDiff,
-                                             queryDiff', queryDiffRemovedDeps,
-                                             queryHash)
-import           Audit.Tree                 (buildDepTree, directDeps,
-                                             indirectDeps)
-import           Audit.Types                (Package (..))
-import           Test.Audit.Gen             (genHash, genNameVersions,
-                                             genPackage, genRemovedPackage,
-                                             genSimpleDepList,
-                                             populateAuditorTempDb,
-                                             populateDiffTempDb)
+import           Audit.Database                             (Auditor,
+                                                             AuditorT (..),
+                                                             Diff, DiffT (..),
+                                                             HashT (..))
+import           Audit.Operations                           (buildPackageList,
+                                                             clearAuditorTable,
+                                                             clearDiffTable,
+                                                             deleteAuditorEntry,
+                                                             deleteHash,
+                                                             diffDepToPackage,
+                                                             insertAuditorDeps,
+                                                             insertHash,
+                                                             insertPackageDiff,
+                                                             insertRemovedDependencies,
+                                                             loadDiffIntoAuditor,
+                                                             loadDiffTable,
+                                                             loadNewDirDepsDiff,
+                                                             loadNewIndirectDepsDiff,
+                                                             pkgToAuditor,
+                                                             pkgToDiff,
+                                                             updateAuditorEntryWithDiff)
+import           Audit.Queries                              (queryAuditor, queryAuditorDepNames,
+                                                             queryAuditorDepVersions,
+                                                             queryAuditorRemovedDeps,
+                                                             queryDiff,
+                                                             queryDiff',
+                                                             queryDiffRemovedDeps,
+                                                             queryHash)
+import           Audit.Tree                                 (buildDepTree,
+                                                             directDeps,
+                                                             indirectDeps)
+import           Audit.Types                                (Package (..))
+import           Test.Audit.Gen                             (genDirectPackage,
+                                                             genHash,
+                                                             genIndirectPackage,
+                                                             genNameVersions,
+                                                             genPackage,
+                                                             genRemovedPackage,
+                                                             genSimpleDepList,
+                                                             populateAuditorTempDb,
+                                                             populateDiffTempDb)
 
 
 
-prop_clearAuditorTable :: Property
-prop_clearAuditorTable =
-    withTests 100 . property $ do
-        _ <- forAllT populateAuditorTempDb
-        liftIO $ clearAuditorTable "temp.db"
-        potentialValues <- liftIO $ queryAuditor "temp.db"
-        potentialValues === []
-
-prop_clearDiffTable :: Property
-prop_clearDiffTable =
-    withTests 100 . property $ do
-        _ <- forAllT populateDiffTempDb
-        liftIO $ clearDiffTable "temp.db"
-        potentialValues <- liftIO $ queryDiff "temp.db"
-        potentialValues === []
 
 -- | Makes sure that no information is lost in `buildPackageList`
 prop_buildPackageList :: Property
@@ -103,6 +109,41 @@ prop_buildPackageList =
 
         dDeps'' === dDeps
         inDeps'' === inDeps
+
+
+prop_clearAuditorTable :: Property
+prop_clearAuditorTable =
+    withTests 100 . property $ do
+        _ <- forAllT populateAuditorTempDb
+        liftIO $ clearAuditorTable "temp.db"
+        potentialValues <- liftIO $ queryAuditor "temp.db"
+        potentialValues === []
+
+prop_clearDiffTable :: Property
+prop_clearDiffTable =
+    withTests 100 . property $ do
+        _ <- forAllT populateDiffTempDb
+        liftIO $ clearDiffTable "temp.db"
+        potentialValues <- liftIO $ queryDiff "temp.db"
+        potentialValues === []
+
+prop_deleteAuditorEntry :: Property
+prop_deleteAuditorEntry = do
+    withTests 100 . property $ do
+        pkg <- forAll genPackage
+        liftIO $ insertAuditorDeps "temp.db" [pkg]
+        liftIO $ deleteAuditorEntry "temp.db" (pkgToAuditor pkg)
+        query <- liftIO $ queryAuditor "temp.db"
+        query === []
+
+prop_diffDepToPackage :: Property
+prop_diffDepToPackage =
+    withTests 100 . property $ do
+        pkg <- forAll genPackage
+        let genDiff = pkgToDiff pkg
+        case diffDepToPackage genDiff of
+            Right pkg' -> pkg' === pkg
+            Left err   -> failWith Nothing $ show err
 
 -- | Makes sure that no information is lost in `pkgToAuditor`
 prop_pkgToAuditor :: Property
@@ -273,6 +314,7 @@ prop_insertPackageDiff =
 prop_updateAuditorEntryWithDiff :: Property
 prop_updateAuditorEntryWithDiff =
     withTests 100 . property $ do
+        -- Original Package
         pkg@( Package
                packageName
                packageVersion
@@ -281,6 +323,7 @@ prop_updateAuditorEntryWithDiff =
                stillUsed
                analysisStatus
             ) <- forAll genPackage
+        -- Updated Package
         pkg'@( Package
                 packageName'
                 packageVersion'
@@ -301,9 +344,12 @@ prop_updateAuditorEntryWithDiff =
         -- matches the input Diff.
         case updateAuditorEntryWithDiff (pkgToDiff pkg') (pkgToAuditor pkg) of
             Left err   -> failWith Nothing $ show err
-            Right aud' -> aud' === pkgToAuditor pkg'
+            Right aud' -> do
+                let original = pkgToAuditor pkg
+                aud' ===  (pkgToAuditor pkg') {auditorDateFirstSeen = (auditorDateFirstSeen original)}
 
 -- | Insert a `Package` from Diff table to Auditor table.
+-- NB: A package is not overwritten if it already exists in the Auditor table.
 -- Tests if the `Package` generated is the same as
 -- the what was stored in the auditor table.
 prop_loadDiffIntoAuditor :: Property
@@ -330,20 +376,13 @@ prop_loadDiffIntoAuditor =
 -- Tests if the `Package` generated is the same as
 -- the what was stored in the auditor table.
 -- TODO: Need to test updateDiffTable* functions first
-{-
-prop_db_remove_dependencies :: Property
-prop_db_remove_dependencies =
-    withTests 100 . property $ do
-        -- Populate auditor table with initial deps.
-        initial <- forAll genSimpleDepList
-        let dDeps = directDeps $ buildDepTree "MainRepository" initial
-        let inDeps = indirectDeps $ buildDepTree "MainRepository" initial
-        versions <- forAll $ genNameVersions (dDeps ++ inDeps)
-        packages = buildPackageList versions dDeps inDeps
-        liftIO $ insertAuditorDeps "temp.db" packages
 
-        -- Package to be removed
+prop_db_insertRemovedDependencies :: Property
+prop_db_insertRemovedDependencies =
+    withTests 100 . property $ do
         pkg <- forAll genPackage
+
+        -- Populate auditor table with a single initial dependency.
         liftIO $ insertAuditorDeps "temp.db" [pkg]
 
 
@@ -352,6 +391,9 @@ prop_db_remove_dependencies =
         liftIO $ insertPackageDiff "temp.db" removedPkg
 
         -- Update auditor table with the new direct dependencies.
+        -- TODO: loadDiffIntoAuditor is not working correctly
+        -- It can insert new dependencies but not update individual fields.
+        liftIO $ deleteAuditorEntry "temp.db" (pkgToAuditor pkg)
         liftIO $ loadDiffIntoAuditor "temp.db"
 
         -- Query auditor table
@@ -359,44 +401,47 @@ prop_db_remove_dependencies =
         liftIO $ clearDiffTable "temp.db"
         liftIO $ clearAuditorTable "temp.db"
 
-        -- Filter removed dependencies
-        let remDeps = filter (\x -> auditorStillUsed x == pack "False") queried
-        liftIO $ print remDeps
-        -- TODO: This fails because buildPackageList already has removed packages included in it
-        -- Need to generate a package list with packages only currently in use!
-        (map auditorPackageName remDeps) === [packageName removedPkg]
-        --map auditorPackageVersion remDeps === [packageVersion removedPkg]
-        --let time = pack . formatTime defaultTimeLocale "%F %X%Q" $ dateFirstSeen removedPkg
-        --map auditorDateFirstSeen remDeps === [time]
-        --map auditorDirectDep remDeps === [pack . show $ directDep removedPkg]
-        --map auditorStillUsed remDeps === [pack . show $ directDep removedPkg]
-        --map auditorAnalysisStatus remDeps === [pack . show $ analysisStatus removedPkg]
--}
+        queried === [pkgToAuditor removedPkg]
 
 prop_loadNewDirDepsDiff :: Property
 prop_loadNewDirDepsDiff =
     withTests 100 . property $ do
 
-    -- Generate direct deps
-    xs <- forAll genSimpleDepList
-    let dDeps = directDeps $ buildDepTree "MainRepository" xs
-    versions <- forAll $ genNameVersions dDeps
+      -- Generate direct deps
+      packages <- forAll $ Gen.list (Range.constant 0 10) genDirectPackage
 
-    cTime <- liftIO $ getCurrentTime
-    let packages = buildPackageList versions dDeps [] cTime
+      -- Insert direct deps into diff table
+      checkDirDeps <- liftIO . runEitherT $ loadNewDirDepsDiff "temp.db" packages
+      case checkDirDeps of
+          Left err -> failWith Nothing $ show err
+          Right _  -> pure ()
 
-    -- Insert direct deps into diff table
-    checkDirDeps <- liftIO . runEitherT $ loadNewDirDepsDiff "temp.db" packages
-    case checkDirDeps of
-        Left err -> failWith Nothing $ show err
-        Right eff-> pure $ eff
+      -- Query diff table
+      queried <- liftIO $ queryDiff' "temp.db"
+      liftIO $ clearDiffTable "temp.db"
 
-    -- Query diff table
-    queried <- liftIO $ queryDiff' "temp.db"
-    liftIO $ clearDiffTable "temp.db"
+      -- Compare generated `Package` with `Package` added to diff table.
+      comparePackageWithDiffEntry (sort packages) (sort queried)
 
-    -- Compare generated `Package` with `Package` added to diff table.
-    comparePackageWithDiffEntry packages queried
+prop_loadNewIndirectDepsDiff :: Property
+prop_loadNewIndirectDepsDiff =
+    withTests 100 . property $ do
+
+      -- Generate indirect deps
+      packages <- forAll $ Gen.list (Range.constant 0 10) genIndirectPackage
+      -- Insert indirect deps into diff table
+      checkDirDeps <- liftIO . runEitherT $ loadNewIndirectDepsDiff "temp.db" packages
+      case checkDirDeps of
+          Left err -> failWith Nothing $ show err
+          Right _  -> pure ()
+
+      -- Query diff table
+      queried <- liftIO $ queryDiff' "temp.db"
+      liftIO $ clearDiffTable "temp.db"
+
+      -- Compare generated `Package` with `Package` added to diff table.
+      comparePackageWithDiffEntry (sort packages) (sort queried)
+
 
 tests :: IO Bool
 tests = and <$> sequence
