@@ -11,15 +11,17 @@ module Audit.Operations
   , insertAuditorDeps
   , insertHash
   , insertPackageDiff
-  , insertRemovedDependencies
+  , insertRemovedDependenciesDiff
   , loadNewDirDepsDiff
   , loadNewIndirectDepsDiff
   , loadDiffTableRemovedDeps
   , loadDiffTable
-  , loadDiffIntoAuditor
+  , loadDiffIntoAuditorNew
+  , loadDiffIntoAuditorUpdate
   , pkgToAuditor
   , pkgToDiff
   , updateAuditorEntryWithDiff
+  , updateAuditorEntry
   ) where
 
 
@@ -30,7 +32,7 @@ import           Audit.Database                             (Auditor,
                                                              HashT (..),
                                                              PrimaryKey (..),
                                                              auditorDb)
-import           Audit.Queries                              (queryAuditorDepNames,
+import           Audit.Queries                              (queryAuditor, queryAuditorDepNames,
                                                              queryDiff,
                                                              queryDiff',
                                                              queryHash)
@@ -46,9 +48,13 @@ import           Audit.Types                                (AnalysisStatus, Con
                                                              QPResult (..),
                                                              Version)
 import           Control.Monad.Trans.Either                 (EitherT,
-                                                             hoistEither)
-import           Data.Either                                (rights)
-import           Data.List                                  (all, find, sort)
+                                                             firstEitherT,
+                                                             hoistEither, left,
+                                                             right, runEitherT)
+import           Data.Either                                (isRight, rights)
+import           Data.List                                  (all, find,
+                                                             intersect, sort,
+                                                             (\\))
 import           Data.Maybe                                 (isNothing)
 import           Data.Maybe                                 (fromMaybe)
 import           Data.Set                                   (difference,
@@ -64,6 +70,7 @@ import           Database.Beam                              (all_, delete,
                                                              runDelete,
                                                              runInsert,
                                                              runSelectReturningOne,
+                                                             runUpdate, save,
                                                              val_, (==.))
 import           Database.Beam.Sqlite.Connection            (runBeamSqlite)
 import           Database.SQLite.Simple                     (close, open)
@@ -238,7 +245,7 @@ insertPackageDiff dbFilename (Package pName pVersion dateFS dDep sUsed aStatus) 
 -- depList    = list of dependencies you want to insert.
 -- dirOrIndir = Bool signlaing whether or not the dependencies you are
 --              inserting are direct or indirect.
--- inYaml     = Bool signaling whether or not the dependencies you
+-- stillUsed     = Bool signaling whether or not the dependencies you
 --              are still in use.
 
 -- | Load a list of 'Package's into the Diff table.
@@ -285,7 +292,7 @@ loadDiffTableRemovedDeps dbName = do
     let rDepText = map pack rDeps -- TODO: Neaten this up
     depsInDiff <- queryDiff dbName
     if all (== False ) [x `elem` map unpack depsInDiff | x <- rDeps]
-        then insertRemovedDependencies dbName rDepText True False
+        then insertRemovedDependenciesDiff dbName rDepText True False
         -- TODO: Need to differentiate between direct and indirect removed deps
         else print ("Already added removed dependencies to the Diff table" :: String)
 
@@ -294,8 +301,9 @@ loadDiffTableRemovedDeps dbName = do
 --------------------------------------------------------------------------------
 
 -- | Compare an entry from the Diff table and Auditor table.
--- Return an updated `Auditor` that will be inserted into the auditor table.
-updateAuditorEntryWithDiff :: Diff -> Auditor -> Either Text Auditor
+-- Return an updated `Auditor` that will be inserted into the auditor table
+-- with the preserved date first seen.
+updateAuditorEntryWithDiff :: Diff -> Auditor -> Either ConversionError Auditor
 updateAuditorEntryWithDiff updatedDep aud = do
     let diffTextVals = diffDepToText updatedDep
 
@@ -310,17 +318,17 @@ updateAuditorEntryWithDiff updatedDep aud = do
     let zipped = zip audTextVals diffTextVals
     toAuditor [if audText == diffText then audText else diffText | (audText, diffText) <- zipped] (auditorDateFirstSeen aud)
   where
-    toAuditor :: [Text] -> Text -> Either Text Auditor
-    toAuditor [pName, pVer, _, dDep, sUsed, aStat] origDateFirstSeen = Right $ Auditor pName pVer origDateFirstSeen dDep sUsed aStat
-    toAuditor _ _ = Left "toAuditor: The impossible happened, this should only yield a list of length 6"
+    toAuditor :: [Text] -> Text -> Either ConversionError Auditor
+    toAuditor [pName, pVer, _newDfSeen, dDep, sUsed, aStat] origDfSeen = Right $ Auditor pName pVer origDfSeen dDep sUsed aStat
+    toAuditor _ _ = Left $ DiffToAuditorError "toAuditor: The impossible happened, this should only yield a list of length 6"
 
 -- | Updates diff with removed dep. Queries auditor because
 -- after the dep is removed from the repository,
 -- `stack ls dependencies` can no longer get the version.
 -- List of text is the list of dependency names
-insertRemovedDependencies :: String -> [Text] -> Bool -> Bool -> IO ()
-insertRemovedDependencies _ [] _ _ = pure ()
-insertRemovedDependencies dbFilename (x:xs) dirOrIndir inYaml = do
+insertRemovedDependenciesDiff :: String -> [Text] -> Bool -> Bool -> IO ()
+insertRemovedDependenciesDiff _ [] _ _ = pure ()
+insertRemovedDependenciesDiff dbFilename (x:xs) dirOrIndir stillUsed = do
     conn <- open dbFilename
     -- Queries auditor
     audQresult <- runBeamSqlite conn $ do
@@ -330,7 +338,7 @@ insertRemovedDependencies dbFilename (x:xs) dirOrIndir inYaml = do
     -- Gets original time the package was first added.
     case audQresult of
         -- Nothing branch should never match
-        Nothing -> insertRemovedDependencies dbFilename xs dirOrIndir False
+        Nothing -> insertRemovedDependenciesDiff dbFilename xs dirOrIndir False
         Just result -> do
                          let dFSeen = auditorDateFirstSeen result
                          case parseUTCTime dFSeen of
@@ -340,99 +348,68 @@ insertRemovedDependencies dbFilename (x:xs) dirOrIndir inYaml = do
                                                     (auditorPackageVersion result)
                                                     utcTime
                                                     dirOrIndir
-                                                    inYaml
+                                                    stillUsed
                                                     [])
                                                 close conn
-                                                insertRemovedDependencies dbFilename xs dirOrIndir False
-                             Left err -> print $ "insertRemovedDependencies: " ++ err
+                                                insertRemovedDependenciesDiff dbFilename xs dirOrIndir False
+                             Left err -> print $ "insertRemovedDependenciesDiff: " ++ err
 
 
--- | Insert dependencies from the Diff table to the Auditor table.
--- If they are new dependencies, directly insert them otherwise
--- call `updateOrModify`
-loadDiffIntoAuditor :: String -> IO ()
-loadDiffIntoAuditor dbName = do
-    conn <- open dbName
-    diffDeps <-  queryDiff dbName
-    -- Check to see if the dependency in Diff exists in Auditor
-    -- If it does, indicates either a version change or dependency removal
-    -- Returns a list of Maybes
-    existingDeps <- mapM (\x -> runBeamSqlite conn $ do
-                                let primaryKeyLookup = lookup_ (auditor auditorDb)
-                                let sqlQuery = primaryKeyLookup $ AuditorPackageName x
-                                runSelectReturningOne sqlQuery) diffDeps
-    case all isNothing existingDeps of
-        -- Inserts all the dependencies from the Diff table into the Auditor table
-        -- These are new dependencies
-        True -> runBeamSqlite conn $ runInsert $
-                    insert (auditor auditorDb) $
-                        insertFrom $ do
-                            allEntries <- all_ (diff auditorDb)
-                            pure (Auditor (diffPackageName allEntries)
-                                          (diffPackageVersion allEntries)
-                                          (diffDateFirstSeen allEntries)
-                                          (diffDirectDep allEntries)
-                                          (diffStillUsed allEntries)
-                                          (diffAnalysisStatus allEntries))
-        -- There are deps in the Diff table that exists in the Auditor table
-        -- I.e this could be a version change
-        _ -> updateOrModify diffDeps
-    -- TODO: New plan, query the Auditor db with each of the "diffDeps". If it exists,
-    -- pull all the fields and see what has changed. You need to copy the timestamp to Diff
-    -- entry. Delete the existing entry in  Auditor and insert the new updated Diff entry
-    close conn
+-- | Updates an entry in the Auditor table and deletes the corresponding entry in Diff table.
+updateAuditorEntry :: String -> Diff -> Auditor -> EitherT OperationError IO OperationResult
+updateAuditorEntry dbName updatedPackage currentPackage = do
+    conn <- liftIO $ open dbName
+    updated <-  firstEitherT ConvError . hoistEither $ updateAuditorEntryWithDiff updatedPackage currentPackage
+    -- Updates corresponding package in auditor table.
+    liftIO $ runBeamSqlite conn $ runUpdate $ save (auditor auditorDb) updated
+    -- Deletes package in diff
+    liftIO $ runBeamSqlite conn $ runDelete $ delete (diff auditorDb)
+        (\table -> diffPackageName table ==. (val_ $ diffPackageName updatedPackage))
+    liftIO $ close conn
+    pure AddedRemovedDependenciesAuditor
 
--- | Add a new dependency to the Auditor table or modify an
--- existing dependency in the Auditor table
-updateOrModify :: [Text]-> IO ()
-updateOrModify [] = pure ()
-updateOrModify (x:xs) = do
-    conn <- open "auditor.db"
-    -- Check to see if the dependency in Diff exists in Auditor
-    -- If it does, indicates either a version change or dependency removal
-    audQresult <- runBeamSqlite conn $ do
-                  let primaryKeyLookup = lookup_ (auditor auditorDb)
-                  let sqlQuery = primaryKeyLookup $ AuditorPackageName x
-                  runSelectReturningOne sqlQuery
-    case audQresult of
-        -- Either the version has changed or the dependency has been removed
-        -- from the repo.
-        Just audDep -> do
-            -- Get dependency from Diff table
-            diffQresult <- runBeamSqlite conn $ do
-                           let primaryKeyLookup = lookup_ (diff auditorDb)
-                           let sqlQuery = primaryKeyLookup $ DiffPackageName x
-                           runSelectReturningOne sqlQuery
-            case diffQresult of
-                Nothing -> updateOrModify xs
-                Just diffDep ->   -- Compare Diff and Audit query; return the updated dependency information
 
-                  case updateAuditorEntryWithDiff diffDep audDep of
-                    Left err -> error $ show err
-                    Right depToIns -> do
-                        runBeamSqlite conn $ runDelete $
-                            delete (auditor auditorDb)
-                                (\table -> auditorPackageName table ==. (val_ $ diffPackageName diffDep))
-                        runBeamSqlite conn $ runInsert $
-                            insert (auditor auditorDb) $
-                            insertValues [ depToIns ]
-                        updateOrModify xs
-        -- New dependency to add to Auditor table.
-        Nothing -> do
-            diffList <- queryDiff' "auditor.db"
-            case find (\d -> diffPackageName d == x ) diffList of
-                Nothing -> updateOrModify xs
-                Just matchedDep -> do
-                                     runBeamSqlite conn $ runInsert $
-                                         insert (auditor auditorDb) $
-                                             insertFrom $
-                                                 pure (Auditor (val_ $ diffPackageName matchedDep)
-                                                               (val_ $ diffPackageVersion matchedDep)
-                                                               (val_ $ diffDateFirstSeen matchedDep)
-                                                               (val_ $ diffDirectDep matchedDep)
-                                                               (val_ $ diffStillUsed matchedDep)
-                                                               (val_ $ diffAnalysisStatus matchedDep))
-                                     updateOrModify xs
+-- | Updates Auditor table with new dependencies from the Diff table
+loadDiffIntoAuditorNew :: String -> EitherT OperationError IO OperationResult
+loadDiffIntoAuditorNew dbName = do
+    diffDeps <- liftIO $ queryDiff' dbName
+    audDeps <- liftIO $ queryAuditor dbName
+    let audPackages = mapM audDepToPackage audDeps
+    let diffPackages = mapM diffDepToPackage diffDeps
+    case (audPackages, diffPackages) of
+        (Right aPkgs, Right dPkgs) -> do
+                     let inCommonPkgs = aPkgs `intersect` dPkgs
+                     let newPkgs = dPkgs \\ inCommonPkgs
+                     conn <- liftIO $ open dbName
+
+                     -- Insert new packages into Auditor table
+                     liftIO $ runBeamSqlite conn $ runInsert $
+                                insert (auditor auditorDb) $
+                                  insertValues (map pkgToAuditor newPkgs)
+                     liftIO $ close conn
+                     right AddedDependenciesDiff
+        (_,_) -> error "loadDiffIntoAuditorNew: Conversion from Diff/Auditor to Package went wrong"
+
+-- | Updates existing dependencies in the Auditor table
+-- with changes introduced by the Diff table.
+loadDiffIntoAuditorUpdate :: String -> EitherT OperationError IO OperationResult
+loadDiffIntoAuditorUpdate dbName = do
+    diffDeps <- liftIO $ queryDiff' dbName
+    audDeps <- liftIO $ queryAuditor dbName
+    -- Convert 'Auditor' and 'Diff' to 'Packages'
+    let audPackages = mapM audDepToPackage audDeps
+    let diffPackages = mapM diffDepToPackage diffDeps
+    case (audPackages, diffPackages) of
+        (Right aPkgs, Right dPkgs) -> do
+             let inCommonPkgs = aPkgs `intersect` dPkgs
+             -- Prepare updated Auditor values for entry into the Auditor table
+             let audEntries = zipWith (updateAuditorEntry dbName) diffDeps audDeps
+             -- TODO: Handle these errors
+             _ <- liftIO $ mapM runEitherT audEntries
+             right AddedDependenciesDiff
+        (_,_) -> error "loadDiffIntoAuditorUpdate: Conversion from Diff/Auditor to Package went wrong"
+
+
 
 --------------------------------------------------------------------------------
 -- Hash Table Operations

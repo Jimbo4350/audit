@@ -35,12 +35,13 @@ import           Audit.Operations                           (buildPackageList,
                                                              clearDiffTable,
                                                              deleteAuditorEntry,
                                                              deleteHash,
+                                                             updateAuditorEntry,
                                                              diffDepToPackage,
+                                                             loadDiffIntoAuditorUpdate,
                                                              insertAuditorDeps,
                                                              insertHash,
                                                              insertPackageDiff,
-                                                             insertRemovedDependencies,
-                                                             loadDiffIntoAuditor,
+                                                             loadDiffIntoAuditorNew,
                                                              loadDiffTable,
                                                              loadNewDirDepsDiff,
                                                              loadNewIndirectDepsDiff,
@@ -200,7 +201,6 @@ prop_deleteHash =
       Just h  -> failWith Nothing $ "Hash still exists in the db: " ++ show h
       Nothing -> assert True
 
--- TODO: Need to distill out update or modify and loadDiffIntoAuditor
 {-
 -- | Tests if a version change update is handled correctly.
 prop_version_change :: Property
@@ -251,7 +251,7 @@ prop_insertAuditorDeps =
         liftIO $ clearAuditorTable "temp.db"
 
         -- Compare generated `Package` with `Package` added to auditor table.
-        comparePackageWithAuditorEntry packages queried
+        comparePackageWithAuditorEntry queried packages
 
 prop_insertDiffDeps :: Property
 prop_insertDiffDeps =
@@ -264,7 +264,7 @@ prop_insertDiffDeps =
         liftIO $ clearDiffTable "temp.db"
 
         -- Compare generated `Package` with `Package` added to diff table.
-        comparePackageWithDiffEntry packages queried
+        comparePackageWithDiffEntry queried packages
 
 -- | Inserts direct and indirect dependencies into the diff table
 -- via a `Tree`. The property compares what was inserted into the
@@ -281,15 +281,15 @@ prop_loadDiffTable =
         liftIO $ loadDiffTable "temp.db" newPkgs
 
         -- Update auditor table with the new direct dependencies.
-        liftIO $ loadDiffIntoAuditor "temp.db"
-
+        result <- liftIO .  runEitherT $ loadDiffIntoAuditorNew "temp.db"
+        evalEither result
         -- Query auditor table
         queried <- liftIO $ queryAuditor "temp.db"
         liftIO $ clearDiffTable "temp.db"
         liftIO $ clearAuditorTable "temp.db"
 
         -- Compare generated `Package` with `Package` added to auditor table.
-        comparePackageWithAuditorEntry (packages ++ newPkgs) queried
+        comparePackageWithAuditorEntry queried (packages ++ newPkgs)
 
 -- | Insert `Package`s into the Diff table.
 -- Tests if the `Package`s inserted and queried are equivalent.
@@ -306,7 +306,7 @@ prop_insertPackageDiff =
         liftIO $ clearDiffTable "temp.db"
 
         -- Compare generated `Package` with `Package` added to diff table.
-        comparePackageWithDiffEntry [pkg] queried
+        comparePackageWithDiffEntry queried [pkg]
 
 -- | When there is a detected change in the dependencies,
 -- this change is uploaded to the diff table as a Diff. We
@@ -346,15 +346,16 @@ prop_updateAuditorEntryWithDiff =
             Left err   -> failWith Nothing $ show err
             Right aud' -> do
                 let original = pkgToAuditor pkg
-                aud' ===  (pkgToAuditor pkg') {auditorDateFirstSeen = (auditorDateFirstSeen original)}
+                aud' ===  (pkgToAuditor pkg') { auditorDateFirstSeen = (auditorDateFirstSeen original)}
 
--- | Insert a `Package` from Diff table to Auditor table.
--- NB: A package is not overwritten if it already exists in the Auditor table.
--- Tests if the `Package` generated is the same as
--- the what was stored in the auditor table.
-prop_loadDiffIntoAuditor :: Property
-prop_loadDiffIntoAuditor =
+
+prop_loadDiffIntoAuditorNew_newDirDependencies_NEWVERSION :: Property
+prop_loadDiffIntoAuditorNew_newDirDependencies_NEWVERSION =
     withTests 100 . property $ do
+        -------------------------------------------------------------
+        -- Insert New Direct Dependencies --
+        -------------------------------------------------------------
+
         pkg <- forAll genPackage
 
         -- Populate diff table with test `Package`s
@@ -362,7 +363,7 @@ prop_loadDiffIntoAuditor =
 
 
         -- Update auditor table with the new direct dependencies.
-        liftIO $ loadDiffIntoAuditor "temp.db"
+        liftIO . runEitherT $ loadDiffIntoAuditorNew "temp.db"
 
         -- Query auditor table
         queried <- liftIO $ queryAuditor "temp.db"
@@ -370,33 +371,52 @@ prop_loadDiffIntoAuditor =
         liftIO $ clearAuditorTable "temp.db"
 
         -- Compare generated `Package` with `Package` added to auditor table.
-        comparePackageWithAuditorEntry [pkg] queried
+        comparePackageWithAuditorEntry queried [pkg]
 
--- | Remove dependencies from the auditor table.
--- Tests if the `Package` generated is the same as
--- the what was stored in the auditor table.
--- TODO: Need to test updateDiffTable* functions first
 
-prop_db_insertRemovedDependencies :: Property
-prop_db_insertRemovedDependencies =
+prop_loadDiffIntoAuditorUpdate_removedDependencies_NEWVERSION :: Property
+prop_loadDiffIntoAuditorUpdate_removedDependencies_NEWVERSION =
+    withTests 100 . property $ do
+        -------------------------------------------------------------
+        -- Update Dependencies to reflect removed dependencies
+        -------------------------------------------------------------
+
+        currentPackage <- forAll genPackage
+
+        -- Populate auditor table with a single initial dependency.
+        liftIO $ insertAuditorDeps "temp.db" [currentPackage]
+
+
+        -- Populate diff with removed dependencies
+        let updatedPkg = currentPackage {stillUsed = False}
+        liftIO $ insertPackageDiff "temp.db" updatedPkg
+        liftIO . runEitherT $ loadDiffIntoAuditorUpdate "temp.db"
+
+        queried <- liftIO $ queryAuditor "temp.db"
+        liftIO $ clearDiffTable "temp.db"
+        liftIO $ clearAuditorTable "temp.db"
+
+        -- Compare generated `Package` with `Package` added to auditor table.
+        comparePackageWithAuditorEntry queried [updatedPkg]
+
+prop_updateAuditorEntry :: Property
+prop_updateAuditorEntry =
     withTests 100 . property $ do
         pkg <- forAll genPackage
 
         -- Populate auditor table with a single initial dependency.
         liftIO $ insertAuditorDeps "temp.db" [pkg]
+        -- second package not added here
 
 
         -- Populate diff with removed dependencies
         let removedPkg = pkg {stillUsed = False}
         liftIO $ insertPackageDiff "temp.db" removedPkg
-
-        -- Update auditor table with the new direct dependencies.
-        -- TODO: loadDiffIntoAuditor is not working correctly
-        -- It can insert new dependencies but not update individual fields.
-        liftIO $ deleteAuditorEntry "temp.db" (pkgToAuditor pkg)
-        liftIO $ loadDiffIntoAuditor "temp.db"
-
+        -- second package note added here
+        liftIO . runEitherT $ updateAuditorEntry "temp.db" (pkgToDiff removedPkg) (pkgToAuditor pkg)
+        --TODO: I wonder if this has to do with having multiple connections open. Check the function
         -- Query auditor table
+        -- Test out the runUpdate save command by itself. That may be the issue.
         queried <- liftIO $ queryAuditor "temp.db"
         liftIO $ clearDiffTable "temp.db"
         liftIO $ clearAuditorTable "temp.db"
@@ -421,7 +441,7 @@ prop_loadNewDirDepsDiff =
       liftIO $ clearDiffTable "temp.db"
 
       -- Compare generated `Package` with `Package` added to diff table.
-      comparePackageWithDiffEntry (sort packages) (sort queried)
+      comparePackageWithDiffEntry (sort queried) (sort packages)
 
 prop_loadNewIndirectDepsDiff :: Property
 prop_loadNewIndirectDepsDiff =
@@ -440,7 +460,7 @@ prop_loadNewIndirectDepsDiff =
       liftIO $ clearDiffTable "temp.db"
 
       -- Compare generated `Package` with `Package` added to diff table.
-      comparePackageWithDiffEntry (sort packages) (sort queried)
+      comparePackageWithDiffEntry (sort queried) (sort packages)
 
 
 tests :: IO Bool
@@ -480,8 +500,8 @@ withTempDB =
 
 -- Compare generated `Package` with an entry in the Auditor table
 
-comparePackageWithAuditorEntry :: MonadTest m => [Package] -> [Auditor] -> m ()
-comparePackageWithAuditorEntry pkgs queried = do
+comparePackageWithAuditorEntry :: MonadTest m => [Auditor] -> [Package] -> m ()
+comparePackageWithAuditorEntry queried pkgs = do
   map auditorPackageName queried === map packageName pkgs
   map auditorPackageVersion queried === map packageVersion pkgs
   let time = map (pack . formatTime defaultTimeLocale "%F %X%Q" . dateFirstSeen) pkgs
@@ -492,8 +512,8 @@ comparePackageWithAuditorEntry pkgs queried = do
 
 -- Compare generated `Package` with an entry in the  Diff table
 
-comparePackageWithDiffEntry :: MonadTest m => [Package] -> [Diff] -> m ()
-comparePackageWithDiffEntry pkgs queried = do
+comparePackageWithDiffEntry :: MonadTest m => [Diff] -> [Package]-> m ()
+comparePackageWithDiffEntry queried pkgs = do
   map diffPackageName queried === map packageName pkgs
   map diffPackageVersion queried === map packageVersion pkgs
   let times = map (pack . formatTime defaultTimeLocale "%F %X%Q" . dateFirstSeen) pkgs
