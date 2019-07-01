@@ -15,8 +15,9 @@ module Test.Audit.Gen
        , populateDiffTempDb
        ) where
 
-import           Audit.Operations       (buildPackageList, insertAuditorDeps,
-                                         loadDiffTable)
+import           Audit.Operations       (buildPackageList, insertAuditorDeps
+                                         )
+import           Audit.DiffOperations   (loadDiffTable)
 import           Audit.Sorting          (groupParseResults)
 import           Audit.Tree             (buildDepTree, directDeps, indirectDeps)
 import           Audit.Types            (AnalysisStatus (..), Package (..))
