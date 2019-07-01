@@ -7,6 +7,7 @@ import           Control.Exception                          (bracket_)
 import           Control.Monad.IO.Class
 import           Control.Monad.Trans.Either                 (runEitherT)
 import           Data.Bifunctor                             (bimap)
+import           Data.Either                                (rights)
 import           Data.List                                  (all, sort)
 import           Data.Text                                  (pack, unpack)
 import           Data.Time.Clock                            (getCurrentTime)
@@ -31,6 +32,8 @@ import           Audit.Database                             (Auditor,
                                                              Diff, DiffT (..),
                                                              HashT (..))
 import           Audit.Operations                           (buildPackageList,
+                                                             insertRemovedDependenciesDiff,
+                                                             audDepToPackage,
                                                              clearAuditorTable,
                                                              clearDiffTable,
                                                              deleteAuditorEntry,
@@ -296,6 +299,7 @@ prop_loadDiffTable =
 prop_insertPackageDiff :: Property
 prop_insertPackageDiff =
     withTests 100 . property $ do
+
         pkg <- forAll genPackage
 
         -- Populate diff with test `Package`s
@@ -307,6 +311,30 @@ prop_insertPackageDiff =
 
         -- Compare generated `Package` with `Package` added to diff table.
         comparePackageWithDiffEntry queried [pkg]
+
+prop_insertRemovedDependenciesDiff :: Property
+prop_insertRemovedDependenciesDiff =
+    withTests 100 . property $ do
+
+       initPkg <- forAll genPackage
+
+       -- Ensure that the Auditor entry has True for stillUsed
+       liftIO $ insertAuditorDeps "temp.db" [(initPkg {stillUsed = True})]
+
+       liftIO $ insertRemovedDependenciesDiff "temp.db" [packageName initPkg]
+
+       diffDepRemoved <- liftIO $ queryDiff' "temp.db"
+       let diffPackage = rights $ diffDepToPackage <$> diffDepRemoved
+
+       audDep <- liftIO $ queryAuditor "temp.db"
+       let audPackage = rights $ audDepToPackage <$> audDep
+
+       liftIO $ clearDiffTable "temp.db"
+       liftIO $ clearAuditorTable "temp.db"
+       -- The diffPackage should be identical to the entry in the Auditor
+       -- table with the exception of the stillUsed flag
+       diffPackage === (map (\x -> x {stillUsed = False}) audPackage )
+
 
 -- | When there is a detected change in the dependencies,
 -- this change is uploaded to the diff table as a Diff. We

@@ -1,7 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Audit.Operations
-  ( buildPackageList
+  ( audDepToPackage
+  , buildPackageList
   , checkHash
   , clearAuditorTable
   , clearDiffTable
@@ -292,7 +293,7 @@ loadDiffTableRemovedDeps dbName = do
     let rDepText = map pack rDeps -- TODO: Neaten this up
     depsInDiff <- queryDiff dbName
     if all (== False ) [x `elem` map unpack depsInDiff | x <- rDeps]
-        then insertRemovedDependenciesDiff dbName rDepText True False
+        then insertRemovedDependenciesDiff dbName rDepText
         -- TODO: Need to differentiate between direct and indirect removed deps
         else print ("Already added removed dependencies to the Diff table" :: String)
 
@@ -326,33 +327,25 @@ updateAuditorEntryWithDiff updatedDep aud = do
 -- after the dep is removed from the repository,
 -- `stack ls dependencies` can no longer get the version.
 -- List of text is the list of dependency names
-insertRemovedDependenciesDiff :: String -> [Text] -> Bool -> Bool -> IO ()
-insertRemovedDependenciesDiff _ [] _ _ = pure ()
-insertRemovedDependenciesDiff dbFilename (x:xs) dirOrIndir stillUsed = do
+insertRemovedDependenciesDiff :: String -> [Text] -> IO ()
+insertRemovedDependenciesDiff _ [] = pure ()
+insertRemovedDependenciesDiff dbFilename (x:xs)  = do
     conn <- open dbFilename
     -- Queries auditor
     audQresult <- runBeamSqlite conn $ do
         let primaryKeyLookup = lookup_ (auditor auditorDb)
         let sqlQuery = primaryKeyLookup $ AuditorPackageName x
         runSelectReturningOne sqlQuery
+    close conn
     -- Gets original time the package was first added.
     case audQresult of
         -- Nothing branch should never match
-        Nothing -> insertRemovedDependenciesDiff dbFilename xs dirOrIndir False
-        Just result -> do
-                         let dFSeen = auditorDateFirstSeen result
-                         case parseUTCTime dFSeen of
-                             Right utcTime -> do
-                                                insertPackageDiff dbFilename (Package
-                                                    x
-                                                    (auditorPackageVersion result)
-                                                    utcTime
-                                                    dirOrIndir
-                                                    stillUsed
-                                                    [])
-                                                close conn
-                                                insertRemovedDependenciesDiff dbFilename xs dirOrIndir False
-                             Left err -> print $ "insertRemovedDependenciesDiff: " ++ err
+        Nothing -> insertRemovedDependenciesDiff dbFilename xs
+        Just result -> case audDepToPackage result of
+                         Left _ -> error "insertRemovedDependenciesDiff: audDepToPackage con error"
+                         Right pkg -> do
+                                      insertPackageDiff dbFilename (pkg {stillUsed = False})
+                                      insertRemovedDependenciesDiff dbFilename xs
 
 
 -- | Updates an entry in the Auditor table and deletes the corresponding entry in Diff table.
