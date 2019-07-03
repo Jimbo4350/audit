@@ -12,17 +12,27 @@ module Audit.Database
   , auditorDb
   , AuditorT(..)
   , Diff
-  , DiffT (..)
+  , DiffT(..)
   , Hash
-  , HashT (..)
+  , HashT(..)
   , PrimaryKey(..)
-  ) where
+  )
+where
 
-import           Data.Text     (Text)
+import Data.Text (Text)
 
-import           Database.Beam (Beamable, Columnar, Database, DatabaseSettings,
-                                Generic, Identity, PrimaryKey (..), Table (..),
-                                TableEntity, defaultDbSettings)
+import Database.Beam
+  ( Beamable
+  , Columnar
+  , Database
+  , DatabaseSettings
+  , Generic
+  , Identity
+  , PrimaryKey(..)
+  , Table(..)
+  , TableEntity
+  , defaultDbSettings
+  )
 
 -- | Auditor Table. Stores the current direct, indirect and
 -- removed dependencies.
@@ -44,8 +54,8 @@ deriving instance Show Auditor
 instance Beamable AuditorT
 
 instance Table AuditorT where
-  data PrimaryKey AuditorT f = AuditorPackageName (Columnar f Text) deriving Generic
-  primaryKey = AuditorPackageName . auditorPackageName
+  data PrimaryKey AuditorT f = NoPrimaryKey deriving Generic
+  primaryKey _ = NoPrimaryKey
 
 instance Beamable (PrimaryKey AuditorT)
 

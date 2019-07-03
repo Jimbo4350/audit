@@ -77,11 +77,14 @@ data OperationResult =
   | LoadedNewDepsFromDiffIntoAuditor
     -- ^ Successfully added new dependencies from the Diff table
     -- to the Auditor table.
+  | NoDirectDependenciesToAdd
+    -- ^ After parsing the '.dot' files no changes were detected i.e
+    -- no new direct dependencies have been added.
   | NoIndirectDependenciesToAdd
-    -- After parsing the '.dot' files no changes were detected i.e
+    -- ^ After parsing the '.dot' files no changes were detected i.e
     -- no new indirect dependencies have been added.
   | NoRemovedDependenciesToAdd
-    -- After parsing the '.dot' files no changes were detected i.e
+    -- ^ After parsing the '.dot' files no changes were detected i.e
     -- no dependencies were removed.
 
 
