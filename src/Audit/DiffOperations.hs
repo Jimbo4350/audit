@@ -9,6 +9,7 @@ module Audit.DiffOperations
   , loadNewDirDepsDiff
   , loadNewIndirectDepsDiff
   , loadDiffTableRemovedDeps
+  , parseQueryDifference
   , pkgToDiff
   , queryDiff
   , queryDiff'
@@ -21,14 +22,10 @@ import Audit.Database
   (PrimaryKey(..), auditorDb, AuditorDb(..), DiffT(..), Diff)
 import Audit.Sorting (removedDeps)
 import Audit.Types
-  ( OperationError(..)
-  , OperationResult(..)
-  , Package(..)
-  , QPResult(..)
-  )
-import Control.Monad.Trans.Either (EitherT, hoistEither)
+  (OperationError(..), OperationResult(..), Package(..), QPResult(..))
+import Control.Monad.Trans.Either (EitherT, hoistEither, right, runEitherT)
 import Data.Either (rights)
-import Data.List (sort)
+import Data.List (sort, intersect)
 import Data.Set (difference, fromList, toList)
 import Database.Beam
   ( all_
@@ -47,7 +44,7 @@ import Database.Beam
   )
 import Database.Beam.Sqlite.Connection (runBeamSqlite)
 import Database.SQLite.Simple (close, open)
-import Data.Text (pack, unpack, Text)
+import Data.Text (pack, Text)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 
 
@@ -115,14 +112,18 @@ insertRemovedDependenciesDiff dbFilename (x : xs) = do
 -- | Load a list of 'Package's into the Diff table.
 -- TODO: This can still throw an error from runBeamSqlite
 --       capture this in EitherT
-loadDiffTable :: String -> [Package] -> IO OperationResult
+loadDiffTable
+  :: String -> [Package] -> EitherT OperationError IO OperationResult
 loadDiffTable dbName pkgs = do
   let diffConversion = map pkgToDiff pkgs
-  conn <- open dbName
-  runBeamSqlite conn $ runInsert $ insert (diff auditorDb) $ insertValues
-    diffConversion
-  close conn
-  pure AddedDependenciesDiff
+  conn <- liftIO $ open dbName
+  liftIO
+    $ runBeamSqlite conn
+    $ runInsert
+    $ insert (diff auditorDb)
+    $ insertValues diffConversion
+  liftIO $ close conn
+  right LoadedDiffTable
 
 -- | Inserts new direct dependencies into the diff table.
 loadNewDirDepsDiff
@@ -133,10 +134,10 @@ loadNewDirDepsDiff dbName parsedDeps = do
   -- TODO: You are ignoring a potential failure here with rights
   let queriedPkgs = rights $ map diffDepToPackage queriedDiffDeps
   case parseQueryDifference dirDeps queriedPkgs of
-    QueryAndParseIdentical -> pure AlreadyAddedDependenciesDiff
+    QueryAndParseIdentical -> pure AlreadyAddedDirectDependenciesDiff
     QPDifference new       -> do
-      _ <- liftIO $ loadDiffTable dbName new
-      pure AddedDependenciesDiff
+      loadDiffTable dbName new
+      pure AddedDirectDependenciesDiff
 
 -- | Inserts new indirect dependencies into the diff table.
 loadNewIndirectDepsDiff
@@ -146,32 +147,55 @@ loadNewIndirectDepsDiff dbName parsedDeps = do
   queriedDiffDeps <- liftIO $ queryDiff' dbName
   let queriedPkgs = rights $ map diffDepToPackage queriedDiffDeps
   case parseQueryDifference indirDeps queriedPkgs of
-    QueryAndParseIdentical -> pure AddedDependenciesDiff
+    QPParseIsEmpty         -> pure NoIndirectDependenciesToAdd
+    QueryAndParseIdentical -> pure AlreadyAddedIndirectDependenciesDiff
     QPDifference new       -> do
-      _ <- liftIO $ loadDiffTable dbName new
-      pure AddedDependenciesDiff
+      loadDiffTable dbName new
+      pure AddedIndirectDependenciesDiff
 
 -- | Inserts removed dependencies into the Diff table.
-loadDiffTableRemovedDeps :: String -> IO ()
+loadDiffTableRemovedDeps :: String -> EitherT OperationError IO OperationResult
 loadDiffTableRemovedDeps dbName = do
-  rDeps <- removedDeps
-  let rDepText = map pack rDeps -- TODO: Neaten this up
-  depsInDiff <- queryDiff dbName
-  if all (== False) [ x `elem` map unpack depsInDiff | x <- rDeps ]
-    then insertRemovedDependenciesDiff dbName rDepText
-      -- TODO: Need to differentiate between direct and indirect removed deps
-    else print
-      ("Already added removed dependencies to the Diff table" :: String)
+  rDeps <- liftIO removedDeps
+  case rDeps of
+    []        -> right NoRemovedDependenciesToAdd
+    otherwise -> do
+      let rDepText = map pack rDeps
+      depsInDiff <- liftIO $ queryDiff dbName
+      let inCommon = depsInDiff `intersect` rDepText
+      case inCommon of
+        []      -> right AlreadyAddedremovedDependenciesDiff
+        remDeps -> do
+          liftIO $ print remDeps
+          liftIO $ insertRemovedDependenciesDiff dbName rDepText
+          pure AddedRemovedDependenciesDiff
+          -- TODO: Need to differentiate between direct and indirect removed deps
 
 -- | Returns the associative difference of two lists.
 -- If the parsed dependencies differ from the database
 -- dependencies, we return the difference or a nullary constructor.
-parseQueryDifference :: (Eq a, Ord a) => [a] -> [a] -> QPResult a
+parseQueryDifference :: [Package] -> [Package] -> QPResult Package
 parseQueryDifference parsed queriedDeps
-  | parsed == queriedDeps = QueryAndParseIdentical
-  | otherwise             = QPDifference diff
+  | parsed == []
+  = QPParseIsEmpty
+  | (  parsedNames
+    == queriedNames
+    && parsedVersions
+    == queriedVersions
+    && parsedDirIndir
+    == queriedDirIndir
+    )
+  = QueryAndParseIdentical
+  | otherwise
+  = QPDifference diff
  where
   diff = sort . toList $ difference (fromList parsed) (fromList queriedDeps)
+  parsedNames     = sort $ map packageName parsed
+  parsedVersions  = sort $ map packageVersion parsed
+  queriedNames    = sort $ map packageName queriedDeps
+  queriedVersions = sort $ map packageVersion queriedDeps
+  parsedDirIndir  = sort $ map directDep parsed
+  queriedDirIndir = sort $ map directDep queriedDeps
 
 
 --------------------------------------------------------------------------------

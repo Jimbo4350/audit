@@ -53,16 +53,38 @@ data OperationError =
  deriving Show
 
 data OperationResult =
-    AlreadyAddedDependenciesDiff
-    -- ^ Already added dependencies to the Diff table.
-  | AddedDependenciesDiff
-    -- ^ Successfully added dependencies to the Diff table.
+    AlreadyAddedIndirectDependenciesDiff
+    -- ^ Already added indirect dependencies to the Diff table.
+  | AlreadyAddedDirectDependenciesDiff
+    -- ^ Already added direct dependencies to the Diff table.
+  | AlreadyAddedremovedDependenciesDiff
+    -- ^ Already added removed dependencies to the Diff table.
+  | AddedDirectDependenciesDiff
+    -- ^ Successfully added direct dependencies to the Diff table.
+  | AddedIndirectDependenciesDiff
+    -- ^ Successfully added indirect dependencies to the Diff table.
   | NoDependenciesRemoved
     -- ^ No dependencies have been removed.
   | AddedRemovedDependenciesDiff
     -- ^ Successfully added removed dependencies to the Diff table.
   | AddedRemovedDependenciesAuditor
     -- ^ Successfully added removed dependencies to the Auditor table.
+  | LoadedDiffTable
+    -- ^ Successfully updated the diff tables with dependencies.
+  | UpdatedExistingAuditorDepsWithDiffDeps
+    -- ^ Successfully updated existing Auditor table entries with
+    -- Diff table enteries
+  | LoadedNewDepsFromDiffIntoAuditor
+    -- ^ Successfully added new dependencies from the Diff table
+    -- to the Auditor table.
+  | NoIndirectDependenciesToAdd
+    -- After parsing the '.dot' files no changes were detected i.e
+    -- no new indirect dependencies have been added.
+  | NoRemovedDependenciesToAdd
+    -- After parsing the '.dot' files no changes were detected i.e
+    -- no dependencies were removed.
+
+
   deriving Show
 
 data Package = Package
@@ -86,6 +108,8 @@ data QPResult a =
     -- ^ Database query and parse result are the same
   | QPDifference [a]
     -- ^ Database query and parse result are different
-  deriving Show
+  | QPParseIsEmpty
+    -- ^ No changes detected between '.dot' files.
+  deriving (Eq, Show)
 
 type Version = String

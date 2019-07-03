@@ -13,6 +13,7 @@ import Data.Text (pack, unpack)
 import Data.Time.Clock (getCurrentTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Database.SQLite.Simple (SQLError)
+import Data.Set (difference, fromList, toList)
 import GHC.Stack (HasCallStack, withFrozenCallStack)
 import Hedgehog
 import qualified Hedgehog.Gen as Gen
@@ -54,6 +55,7 @@ import Audit.DiffOperations
   , loadDiffTable
   , loadNewDirDepsDiff
   , loadNewIndirectDepsDiff
+  , parseQueryDifference
   , pkgToDiff
   , queryDiff
   , queryDiff'
@@ -66,7 +68,7 @@ import Audit.Queries
   , queryHash
   )
 import Audit.Tree (buildDepTree, directDeps, indirectDeps)
-import Audit.Types (Package(..))
+import Audit.Types (Package(..), QPResult(..))
 import Test.Audit.Gen
   ( genDirectPackage
   , genHash
@@ -80,7 +82,16 @@ import Test.Audit.Gen
   )
 
 
+prop_parseQueryDifference :: Property
+prop_parseQueryDifference = withTests 100 . property $ do
+  parsed  <- forAll $ Gen.list (Range.linear 0 10) genPackage
+  queried <- forAll $ Gen.list (Range.linear 0 10) genPackage
 
+  parseQueryDifference parsed parsed === QueryAndParseIdentical
+  let diff = sort . toList $ difference (fromList parsed) (fromList queried)
+  case parsed == queried of
+    False  -> parseQueryDifference parsed queried === QPDifference diff
+    True -> parseQueryDifference parsed queried === QueryAndParseIdentical
 
 -- | Makes sure that no information is lost in `buildPackageList`
 prop_buildPackageList :: Property
@@ -531,6 +542,7 @@ prop_loadNewIndirectDepsDiff =
 
         -- Compare generated `Package` with `Package` added to diff table.
         comparePackageWithDiffEntry (sort queried) (sort packages)
+
 
 
 tests :: IO Bool
