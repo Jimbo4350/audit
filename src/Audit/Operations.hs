@@ -172,8 +172,11 @@ loadDiffIntoAuditorNew dbName = do
   let diffPackages = mapM diffDepToPackage diffDeps
   case (audPackages, diffPackages) of
     (Right aPkgs, Right dPkgs) -> do
-      let inCommonPkgs = aPkgs `intersect` dPkgs
-      let newPkgs      = dPkgs \\ inCommonPkgs
+      -- These check via name because the name in the sql table
+      -- must be unique
+      let inCommonPkgs = (map packageName aPkgs) `intersect` (map packageName dPkgs)
+      let newPkgsName      = (map packageName dPkgs) \\ inCommonPkgs
+      let newPkgs = [x | x <- (aPkgs ++ dPkgs), packageName x `elem` newPkgsName ]
       conn <- liftIO $ open dbName
 
       -- Insert new packages into Auditor table
@@ -183,7 +186,7 @@ loadDiffIntoAuditorNew dbName = do
         $ insert (auditor auditorDb)
         $ insertValues (map pkgToAuditor newPkgs)
       liftIO $ close conn
-      right AddedDependenciesDiff
+      right LoadedNewDepsFromDiffIntoAuditor
     (_, _) ->
       error
         "loadDiffIntoAuditorNew: Conversion from Diff/Auditor to Package went wrong"
@@ -203,7 +206,7 @@ loadDiffIntoAuditorUpdate dbName = do
       let audEntries   = zipWith (updateAuditorEntry dbName) diffDeps audDeps
       -- TODO: Handle these errors
       _ <- liftIO $ mapM runEitherT audEntries
-      right AddedDependenciesDiff
+      right UpdatedExistingAuditorDepsWithDiffDeps
     (_, _) ->
       error
         "loadDiffIntoAuditorUpdate: Conversion from Diff/Auditor to Package went wrong"

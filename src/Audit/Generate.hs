@@ -34,9 +34,10 @@ import Audit.Sorting
   , originalDirectDeps
   , removedDeps
   )
+import Audit.Database (DiffT(..))
 import Audit.Tree (directDeps, indirectDeps)
 import Audit.Types
-  (Command(..), HashStatus(..), OperationError(..), OperationResult(..))
+  (Command(..), HashStatus(..), OperationError(..), OperationResult(..),Package(..))
 import Data.Time.Clock (getCurrentTime)
 import Audit.DiffOperations
   ( clearDiffTable
@@ -104,7 +105,8 @@ audit :: IO ()
 audit = do
   hashStat <- checkDB
   case hashStat of
-    HashMatches ->
+    HashMatches -> do
+      clearDiffTable "auditor.db"
       print
         "Hashes match, dependency tree has not \
                                  \been changed."
@@ -119,6 +121,9 @@ audit = do
 
       cTime     <- getCurrentTime
       -- Add new direct dependencies to the Diff table
+      -- TODO: shift direct and indirect checks here and create custom
+      -- types for them to feed into loadNewDir* functions
+      queriedDiffDeps <- queryDiff' "auditor.db"
       report =<< runEitherT
         ( loadNewDirDepsDiff "auditor.db"
         $ buildPackageList pVersions dDeps [] cTime
@@ -130,7 +135,7 @@ audit = do
         $ buildPackageList pVersions [] newInDeps cTime
         )
 
-      loadDiffTableRemovedDeps "auditor.db"
+      report =<< (runEitherT $ loadDiffTableRemovedDeps "auditor.db")
     HashNotFound -> do
       print "Hash not found, generating db."
       initializeDB
