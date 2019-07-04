@@ -75,13 +75,13 @@ initializeDB :: IO ()
 initializeDB =
   callCommand
     "sqlite3 auditor.db \
-    \\"CREATE TABLE auditor ( package_name VARCHAR NOT NULL\
+    \\"CREATE TABLE auditor ( package_id INTEGER PRIMARY KEY AUTOINCREMENT\
+                           \, package_name VARCHAR NOT NULL\
                            \, package_version VARCHAR NOT NULL\
                            \, date_first_seen VARCHAR NOT NULL\
                            \, direct_dep VARCHAR NOT NULL\
                            \, still_used VARCHAR NOT NULL\
-                           \, analysis_status VARCHAR NOT NULL\
-                           \, PRIMARY KEY( package_name )); \
+                           \, analysis_status VARCHAR NOT NULL);\
      \CREATE TABLE hash ( current_hash INT NOT NULL\
                            \, PRIMARY KEY ( current_hash )); \
      \CREATE TABLE diff ( package_name VARCHAR NOT NULL\
@@ -90,7 +90,7 @@ initializeDB =
                            \, direct_dep VARCHAR NOT NULL\
                            \, still_used VARCHAR NOT NULL\
                            \, analysis_status VARCHAR NOT NULL\
-                           \, PRIMARY KEY( package_name )); \""
+                           \, PRIMARY KEY( package_name, direct_dep )); \""
 
 
 ------------------------------Handler-----------------------------------
@@ -180,7 +180,7 @@ update = do
         "Inserting changes from Diff table into \
                         \Auditor table.."
       _ <- runEitherT $ loadDiffIntoAuditorNew "auditor.db"
-      _ <- runEitherT $ loadDiffIntoAuditorUpdate "auditor.db"
+    --  _ <- runEitherT $ loadDiffIntoAuditorUpdate "auditor.db"
       print
         "Overwriting original repository dependency \
                         \tree & clearing Diff table"

@@ -82,12 +82,20 @@ import Test.Audit.Gen
   )
 
 
-prop_parseQueryDifference :: Property
-prop_parseQueryDifference = withTests 100 . property $ do
-  parsed  <- forAll $ Gen.list (Range.linear 0 10) genPackage
+prop_parseQueryDifference_emptyParse :: Property
+prop_parseQueryDifference_emptyParse = withTests 100 . property $ do
   queried <- forAll $ Gen.list (Range.linear 0 10) genPackage
+  parseQueryDifference [] queried === QPParseIsEmpty
 
+prop_parseQueryDifference_identical :: Property
+prop_parseQueryDifference_identical = withTests 100 . property $ do
+  parsed  <- forAll $ Gen.list (Range.linear 1 10) genPackage
   parseQueryDifference parsed parsed === QueryAndParseIdentical
+
+prop_parseQueryDifference_different :: Property
+prop_parseQueryDifference_different = withTests 100 . property $ do
+  parsed <- forAll $ Gen.list (Range.linear 1 10) genPackage
+  queried <- forAll $ Gen.list (Range.linear 0 10) genPackage
   let diff = sort . toList $ difference (fromList parsed) (fromList queried)
   case parsed == queried of
     False  -> parseQueryDifference parsed queried === QPDifference diff
@@ -321,7 +329,8 @@ prop_loadDiffTable =
 
         -- Put new deps into diff table.
         newPkgs <- forAll $ Gen.list (Range.linear 0 50) genPackage
-        liftIO $ loadDiffTable "temp.db" newPkgs
+        result <- liftIO . runEitherT $ loadDiffTable "temp.db" newPkgs
+        evalEither result
 
         -- Update auditor table with the new direct dependencies.
         result <- liftIO . runEitherT $ loadDiffIntoAuditorNew "temp.db"

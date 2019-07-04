@@ -172,11 +172,15 @@ loadDiffIntoAuditorNew dbName = do
   let diffPackages = mapM diffDepToPackage diffDeps
   case (audPackages, diffPackages) of
     (Right aPkgs, Right dPkgs) -> do
-      -- These check via name because the name in the sql table
-      -- must be unique
-      let inCommonPkgs = (map packageName aPkgs) `intersect` (map packageName dPkgs)
-      let newPkgsName      = (map packageName dPkgs) \\ inCommonPkgs
-      let newPkgs = [x | x <- (aPkgs ++ dPkgs), packageName x `elem` newPkgsName ]
+      -- What constitutes a new package?
+      -- packageName
+      -- packageVersion
+      -- directDep
+      let inCommonPkgs = pkgThruples aPkgs `intersect` pkgThruples dPkgs
+      let newPkgsName  = pkgThruples dPkgs \\ inCommonPkgs
+      let
+        newPkgs =
+          [ x | x <- dPkgs, packageName x `elem` (map fst3 newPkgsName) ]
       conn <- liftIO $ open dbName
 
       -- Insert new packages into Auditor table
@@ -190,6 +194,13 @@ loadDiffIntoAuditorNew dbName = do
     (_, _) ->
       error
         "loadDiffIntoAuditorNew: Conversion from Diff/Auditor to Package went wrong"
+ where
+    -- Makes it easy to filter new packages
+  pkgThruples :: [Package] -> [(Text, Text, Bool)]
+  pkgThruples pkgs =
+    map (\pkg -> (packageName pkg, packageVersion pkg, directDep pkg)) pkgs
+  fst3 :: (Text, Text, Bool) -> Text
+  fst3 (x, _, _) = x
 
 -- | Updates existing dependencies in the Auditor table
 -- with changes introduced by the Diff table.
@@ -203,7 +214,10 @@ loadDiffIntoAuditorUpdate dbName = do
   case (audPackages, diffPackages) of
     (Right _, Right _) -> do
       -- Prepare updated Auditor values for entry into the Auditor table
-      let audEntries   = zipWith (updateAuditorEntry dbName) diffDeps audDeps
+      -- What constitutes an update to an entry?
+      -- stillUsed
+      -- analysis status
+      let audEntries = zipWith (updateAuditorEntry dbName) diffDeps audDeps
       -- TODO: Handle these errors
       _ <- liftIO $ mapM runEitherT audEntries
       right UpdatedExistingAuditorDepsWithDiffDeps

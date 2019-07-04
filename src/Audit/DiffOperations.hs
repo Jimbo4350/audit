@@ -18,8 +18,7 @@ where
 
 import Audit.Conversion
   (audDepToPackage, diffDepToPackage, diffDepToText, pkgToDiff)
-import Audit.Database
-  (PrimaryKey(..), auditorDb, AuditorDb(..), DiffT(..), Diff)
+import Audit.Database (AuditorT(..), auditorDb, AuditorDb(..), DiffT(..), Diff)
 import Audit.Sorting (removedDeps)
 import Audit.Types
   (OperationError(..), OperationResult(..), Package(..), QPResult(..))
@@ -42,6 +41,7 @@ import Database.Beam
   , insert
   , insertValues
   )
+import Database.Beam.Query (filter_, just_)
 import Database.Beam.Sqlite.Connection (runBeamSqlite)
 import Database.SQLite.Simple (close, open)
 import Data.Text (pack, Text)
@@ -88,25 +88,17 @@ insertPackageDiff dbFilename (Package pName pVersion dateFS dDep sUsed aStatus)
 -- `stack ls dependencies` can no longer get the version.
 -- List of text is the list of dependency names
 insertRemovedDependenciesDiff :: String -> [Text] -> IO ()
-insertRemovedDependenciesDiff _          []       = pure ()
-insertRemovedDependenciesDiff dbFilename (x : xs) = do
+insertRemovedDependenciesDiff _          []                  = pure ()
+insertRemovedDependenciesDiff dbFilename remDeps = do
   conn       <- open dbFilename
-  -- Queries auditor
-  audQresult <- runBeamSqlite conn $ do
-    let primaryKeyLookup = lookup_ (auditor auditorDb)
-    let sqlQuery         = primaryKeyLookup $ AuditorPackageName x
-    runSelectReturningOne sqlQuery
+  audQresult <- runBeamSqlite conn $ runSelectReturningList $ select $ (all_ (auditor auditorDb))
   close conn
-  -- Gets original time the package was first added.
-  case audQresult of
-      -- Nothing branch should never match
-    Nothing     -> insertRemovedDependenciesDiff dbFilename xs
-    Just result -> case audDepToPackage result of
-      Left _ ->
-        error "insertRemovedDependenciesDiff: audDepToPackage con error"
-      Right pkg -> do
-        insertPackageDiff dbFilename (pkg { stillUsed = False })
-        insertRemovedDependenciesDiff dbFilename xs
+  -- TODO: This discards possible errors
+  let audPackages = rights $ map audDepToPackage audQresult
+  let inCommon = [x | x <- audPackages, packageName x `elem` remDeps]
+  let insertTheseDeps = map (\x -> x {stillUsed = False}) inCommon
+
+  mapM_ (insertPackageDiff dbFilename) insertTheseDeps
 
 
 -- | Load a list of 'Package's into the Diff table.
@@ -134,6 +126,7 @@ loadNewDirDepsDiff dbName parsedDeps = do
   -- TODO: You are ignoring a potential failure here with rights
   let queriedPkgs = rights $ map diffDepToPackage queriedDiffDeps
   case parseQueryDifference dirDeps queriedPkgs of
+    QPParseIsEmpty         -> pure NoDirectDependenciesToAdd
     QueryAndParseIdentical -> pure AlreadyAddedDirectDependenciesDiff
     QPDifference new       -> do
       loadDiffTable dbName new
