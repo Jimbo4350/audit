@@ -6,21 +6,11 @@ module Audit.AuditorOperations
   )
 where
 
-import Audit.Conversion (pkgToAuditor)
+import Audit.Conversion (parsedDepToAudQExpr, pkgToAuditor)
 import Audit.Database (Auditor, AuditorDb(..), AuditorT(..), auditorDb)
-import Audit.Types (Package(..))
+import Audit.Types (Package(..), ParsedDependency(..))
 import Database.Beam
-  ( all_
-  , delete
-  , runSelectReturningList
-  , select
-  , runDelete
-  , val_
-  , (==.)
-  , runInsert
-  , insert
-  , insertValues
-  )
+
 import Database.Beam.Sqlite.Connection (runBeamSqlite)
 import Database.SQLite.Simple (close, open)
 import Data.Text (Text)
@@ -51,13 +41,16 @@ deleteAuditorEntry dbName aud = do
     (\table -> auditorPackageName table ==. val_ (auditorPackageName aud))
   close conn
 
--- | Inserts original direct & indirect dependencies into auditor table.
-insertAuditorDeps :: String -> [Package] -> IO ()
+-- | Inserts original direct & indirect dependencies
+-- directly into auditor table.
+insertAuditorDeps :: String -> [ParsedDependency] -> IO ()
 insertAuditorDeps dbFilename pkgs = do
-  let auditorConversion = map pkgToAuditor pkgs
+  let audExp = map parsedDepToAudQExpr pkgs
   conn <- open dbFilename
-  runBeamSqlite conn $ runInsert $ insert (auditor auditorDb) $ insertValues
-    auditorConversion
+  runBeamSqlite conn
+      $ runInsert
+      $ insert (auditor auditorDb)
+      $ insertExpressions audExp
   close conn
 
 queryAuditorDepNames :: String -> IO [Text]

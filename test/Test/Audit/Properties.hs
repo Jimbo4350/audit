@@ -34,7 +34,7 @@ import System.Process (callCommand)
 
 import Audit.Database (Auditor, AuditorT(..), Diff, DiffT(..), HashT(..))
 import Audit.Operations
-  ( buildPackageList
+  ( buildParsedDependencyList
   , audDepToPackage
   , clearAuditorTable
   , deleteAuditorEntry
@@ -52,10 +52,10 @@ import Audit.DiffOperations
   ( insertRemovedDependenciesDiff
   , clearDiffTable
   , insertPackageDiff
-  , loadDiffTable
+  , loadDiffTableNewDepsOnly
   , loadNewDirDepsDiff
   , loadNewIndirectDepsDiff
-  , parseQueryDifference
+  , checkForNewDependenciesAgainstDb
   , pkgToDiff
   , queryDiff
   , queryDiff'
@@ -82,28 +82,28 @@ import Test.Audit.Gen
   )
 
 
-prop_parseQueryDifference_emptyParse :: Property
-prop_parseQueryDifference_emptyParse = withTests 100 . property $ do
+prop_checkForNewDependenciesAgainstDb_emptyParse :: Property
+prop_checkForNewDependenciesAgainstDb_emptyParse = withTests 100 . property $ do
   queried <- forAll $ Gen.list (Range.linear 0 10) genPackage
-  parseQueryDifference [] queried === QPParseIsEmpty
+  checkForNewDependenciesAgainstDb [] queried === QPParseIsEmpty
 
-prop_parseQueryDifference_identical :: Property
-prop_parseQueryDifference_identical = withTests 100 . property $ do
+prop_checkForNewDependenciesAgainstDb_identical :: Property
+prop_checkForNewDependenciesAgainstDb_identical = withTests 100 . property $ do
   parsed  <- forAll $ Gen.list (Range.linear 1 10) genPackage
-  parseQueryDifference parsed parsed === QueryAndParseIdentical
+  checkForNewDependenciesAgainstDb parsed parsed === QueryAndParseIdentical
 
-prop_parseQueryDifference_different :: Property
-prop_parseQueryDifference_different = withTests 100 . property $ do
+prop_checkForNewDependenciesAgainstDb_different :: Property
+prop_checkForNewDependenciesAgainstDb_different = withTests 100 . property $ do
   parsed <- forAll $ Gen.list (Range.linear 1 10) genPackage
   queried <- forAll $ Gen.list (Range.linear 0 10) genPackage
   let diff = sort . toList $ difference (fromList parsed) (fromList queried)
   case parsed == queried of
-    False  -> parseQueryDifference parsed queried === QPDifference diff
-    True -> parseQueryDifference parsed queried === QueryAndParseIdentical
+    False  -> checkForNewDependenciesAgainstDb parsed queried === QPDifference diff
+    True -> checkForNewDependenciesAgainstDb parsed queried === QueryAndParseIdentical
 
--- | Makes sure that no information is lost in `buildPackageList`
-prop_buildPackageList :: Property
-prop_buildPackageList =
+-- | Makes sure that no information is lost in `buildParsedDependencyList`
+prop_buildParsedDependencyList :: Property
+prop_buildParsedDependencyList =
   withTests 100
     . property
     $ do
@@ -115,13 +115,13 @@ prop_buildPackageList =
 
         cTime    <- liftIO $ getCurrentTime
         -- Build `Package` list
-        let pkgs      = buildPackageList versions dDeps inDeps cTime
+        let pkgs      = buildParsedDependencyList versions dDeps inDeps cTime
 
         -- Build direct dependencies only
-        let dirPkgs   = buildPackageList versions dDeps [] cTime
+        let dirPkgs   = buildParsedDependencyList versions dDeps [] cTime
 
         -- Build direct dependencies only
-        let indirPkgs = buildPackageList versions [] inDeps cTime
+        let indirPkgs = buildParsedDependencyList versions [] inDeps cTime
 
 
         -- Deconstruct `Packages`s to strings
@@ -256,7 +256,7 @@ prop_version_change =
         let dDeps = directDeps $ buildDepTree "MainRepository" initial
         let inDeps = indirectDeps $ buildDepTree "MainRepository" initial
         versions <- forAll $ genNameVersions (dDeps ++ inDeps)
-        packages = buildPackageList versions dDeps inDeps
+        packages = buildParsedDependencyList versions dDeps inDeps
         liftIO $ insertAuditorDeps "temp.db" packages
 
         -- Put new deps into diff table.
@@ -264,9 +264,9 @@ prop_version_change =
         let newDirDeps = directDeps $ buildDepTree "MainRepository" new
         let newInDirDeps = indirectDeps $ buildDepTree "MainRepository" new
         newVersions <- forAll $ genNameVersions (newDirDeps ++ newInDirDeps)
-        newPkgs = buildPackageList newVersions newDirDeps newInDirDeps
-        liftIO $ loadDiffTable "temp.db" newPkgs
-        --liftIO $ loadDiffTable "temp.db" <$> buildPackageList versions [] newInDirDeps
+        newPkgs = buildParsedDependencyList newVersions newDirDeps newInDirDeps
+        liftIO $ loadDiffTableNewDepsOnly "temp.db" newPkgs
+        --liftIO $ loadDiffTableNewDepsOnly "temp.db" <$> buildParsedDependencyList versions [] newInDirDeps
 
         -- Update auditor table with the new direct dependencies.
         liftIO $ loadDiffIntoAuditor "temp.db"
@@ -305,7 +305,7 @@ prop_insertDiffDeps =
   withTests 100
     . property
     $ do
-        -- Uses 'loadDiffTable' to populate a the diff table with 'Packages'
+        -- Uses 'loadDiffTableNewDepsOnly' to populate a the diff table with 'Packages'
         packages <- forAllT populateDiffTempDb
 
         -- Query diff table.
@@ -329,7 +329,7 @@ prop_loadDiffTable =
 
         -- Put new deps into diff table.
         newPkgs <- forAll $ Gen.list (Range.linear 0 50) genPackage
-        result <- liftIO . runEitherT $ loadDiffTable "temp.db" newPkgs
+        result <- liftIO . runEitherT $ loadDiffTableNewDepsOnly "temp.db" newPkgs
         evalEither result
 
         -- Update auditor table with the new direct dependencies.

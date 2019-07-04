@@ -1,8 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Audit.Operations
-  ( audDepToPackage
-  , buildPackageList
+  ( buildParsedDependencyList
   , checkHash
   , clearAuditorTable
   , deleteAuditorEntry
@@ -12,9 +11,11 @@ module Audit.Operations
   , insertHash
   , loadDiffIntoAuditorNew
   , loadDiffIntoAuditorUpdate
+  , loadDiffIntoAuditorUpdateStillUsed
   , pkgToAuditor
   , updateAuditorEntryWithDiff
   , updateAuditorEntry
+  , updateAuditorEntryDirect
   )
 where
 
@@ -22,7 +23,7 @@ import Audit.AuditorOperations
   (clearAuditorTable, deleteAuditorEntry, insertAuditorDeps)
 import Audit.Database
   (Auditor, AuditorDb(..), AuditorT(..), Diff, DiffT(..), HashT(..), auditorDb)
-import Audit.DiffOperations (queryDiff', diffDepToPackage, diffDepToText)
+import Audit.DiffOperations (queryDiff', diffDepToPackage, diffDepToText, clearDiffTable)
 import Audit.Queries (queryAuditor, queryHash)
 import Audit.Types
   ( AnalysisStatus
@@ -34,27 +35,19 @@ import Audit.Types
   , OperationResult(..)
   , Package(..)
   , PackageName
+  , ParsedDependency (..)
   , Version
   )
-import Control.Monad.Trans.Either
-  (EitherT, firstEitherT, hoistEither, right, runEitherT)
+import Audit.Conversion (pkgToDiff, pkgThruples, fst3, pkgToAuditor, createPackage, audDepToPackage, parsedDepToAudQExpr, packageToParsedDep)
+import Control.Monad.Trans.Either (EitherT, firstEitherT, hoistEither, right)
+import Data.Int (Int32)
 import Data.List (intersect, (\\))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text, pack, unpack)
 import Data.Time.Clock (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Database.Beam
-  ( delete
-  , insert
-  , insertValues
-  , liftIO
-  , runDelete
-  , runInsert
-  , runUpdate
-  , save
-  , val_
-  , (==.)
-  )
+
 import Database.Beam.Sqlite.Connection (runBeamSqlite)
 import Database.SQLite.Simple (close, open)
 import Database.SQLite.Simple.Time.Implementation (parseUTCTime)
@@ -66,13 +59,13 @@ import Database.SQLite.Simple.Time.Implementation (parseUTCTime)
 
 -- | Build package/dependency list for the initialization of
 -- the database.
-buildPackageList
+buildParsedDependencyList
   :: [(PackageName, Version)]
   -> [DirectDependency]
   -> [IndirectDependency]
   -> UTCTime
-  -> [Package]
-buildPackageList pVersions dDeps indirDeps currTime = do
+  -> [ParsedDependency]
+buildParsedDependencyList pVersions dDeps indirDeps currTime = do
 
   let directPackages   = map (directPkg currTime) dDeps
   let indirectPackages = map (indirectPkg currTime) indirDeps
@@ -81,29 +74,8 @@ buildPackageList pVersions dDeps indirDeps currTime = do
  where
   lookupVersion x =
     (pack $ fromMaybe "No version Found" (lookup x pVersions))
-  directPkg time x = Package (pack x) (lookupVersion x) time True True []
-  indirectPkg time x = Package (pack x) (lookupVersion x) time False True []
-
-createPackage
-  :: Text -> Text -> UTCTime -> Bool -> Bool -> [AnalysisStatus] -> Package
-createPackage pName pVer dateFirSeen dirDep stillUsed aStat =
-  Package pName pVer dateFirSeen dirDep stillUsed aStat
-
-audDepToPackage :: Auditor -> Either ConversionError Package
-audDepToPackage diff = case audDepToText diff of
-  [pName, pVer, dateFirSeen, dirDep, stillUsed, aStat] -> do
-    case (parseUTCTime dateFirSeen) of
-      Left  err  -> Left $ UTCTimeParseError err
-      Right time -> Right $ createPackage
-        pName
-        pVer
-        time
-        (read $ unpack dirDep)
-        (read $ unpack stillUsed)
-        ((read $ unpack aStat) :: [AnalysisStatus])
-  _ ->
-    error
-      "diffDepToPackage: An additional column was added to the Diff table, please account for it here"
+  directPkg time x = ParsedDependency (pack x) (lookupVersion x) time True True []
+  indirectPkg time x = ParsedDependency (pack x) (lookupVersion x) time False True []
 
 
 --------------------------------------------------------------------------------
@@ -120,7 +92,8 @@ updateAuditorEntryWithDiff updatedDep aud = do
   let
     audTextVals = map
       (\f -> f aud)
-      [ auditorPackageName
+      [ (pack . show .  auditorDependencyId)
+      , auditorPackageName
       , auditorPackageVersion
       , auditorDateFirstSeen
       , auditorDirectDep
@@ -136,8 +109,8 @@ updateAuditorEntryWithDiff updatedDep aud = do
     (auditorDateFirstSeen aud)
  where
   toAuditor :: [Text] -> Text -> Either ConversionError Auditor
-  toAuditor [pName, pVer, _newDfSeen, dDep, sUsed, aStat] origDfSeen =
-    Right $ Auditor pName pVer origDfSeen dDep sUsed aStat
+  toAuditor [pId, pName, pVer, _newDfSeen, dDep, sUsed, aStat] origDfSeen =
+    Right $ Auditor (read $ show pId :: Int32) pName pVer origDfSeen dDep sUsed aStat
   toAuditor _ _ =
     Left
       $ DiffToAuditorError
@@ -175,32 +148,30 @@ loadDiffIntoAuditorNew dbName = do
       -- What constitutes a new package?
       -- packageName
       -- packageVersion
-      -- directDep
+      -- directDep (may be added as a direct dependency whereas before it was
+      -- and indirect dependency. This is treated as a new package)
       let inCommonPkgs = pkgThruples aPkgs `intersect` pkgThruples dPkgs
+      -- Here we exclude dependencies that already exist in the Auditor table
       let newPkgsName  = pkgThruples dPkgs \\ inCommonPkgs
       let
         newPkgs =
-          [ x | x <- dPkgs, packageName x `elem` (map fst3 newPkgsName) ]
+          [ x | x <- dPkgs, packageName x `elem` map fst3 newPkgsName ]
       conn <- liftIO $ open dbName
-
+      liftIO $ print "From loadDiffIntoAuditorNew"
+      liftIO $ print newPkgs
       -- Insert new packages into Auditor table
       liftIO
         $ runBeamSqlite conn
         $ runInsert
         $ insert (auditor auditorDb)
-        $ insertValues (map pkgToAuditor newPkgs)
+        $ insertExpressions (map (parsedDepToAudQExpr . packageToParsedDep) newPkgs)
+      -- Delete packages from Diff that were added to Auditor
+      liftIO $ clearDiffTable dbName
       liftIO $ close conn
       right LoadedNewDepsFromDiffIntoAuditor
     (_, _) ->
       error
         "loadDiffIntoAuditorNew: Conversion from Diff/Auditor to Package went wrong"
- where
-    -- Makes it easy to filter new packages
-  pkgThruples :: [Package] -> [(Text, Text, Bool)]
-  pkgThruples pkgs =
-    map (\pkg -> (packageName pkg, packageVersion pkg, directDep pkg)) pkgs
-  fst3 :: (Text, Text, Bool) -> Text
-  fst3 (x, _, _) = x
 
 -- | Updates existing dependencies in the Auditor table
 -- with changes introduced by the Diff table.
@@ -212,20 +183,56 @@ loadDiffIntoAuditorUpdate dbName = do
   let audPackages  = mapM audDepToPackage audDeps
   let diffPackages = mapM diffDepToPackage diffDeps
   case (audPackages, diffPackages) of
-    (Right _, Right _) -> do
+    (Right aPkgs, Right dPkgs) -> do
       -- Prepare updated Auditor values for entry into the Auditor table
       -- What constitutes an update to an entry?
       -- stillUsed
       -- analysis status
-      let audEntries = zipWith (updateAuditorEntry dbName) diffDeps audDeps
-      -- TODO: Handle these errors
-      _ <- liftIO $ mapM runEitherT audEntries
+      -- Which entry to update?
+      -- Need to separate into two further functions: stillUsed and analysisStatus
+      let inCommonPkgs = pkgThruples aPkgs `intersect` pkgThruples dPkgs
+      let
+        updatedPackages =
+          [ x | x <- dPkgs, packageName x `elem` map fst3 inCommonPkgs ]
+      conn <- liftIO $ open dbName
+      liftIO $ print updatedPackages
+      liftIO $ mapM
+        (runBeamSqlite conn . runUpdate . save (auditor auditorDb))
+        (map pkgToAuditor updatedPackages)
       right UpdatedExistingAuditorDepsWithDiffDeps
     (_, _) ->
       error
         "loadDiffIntoAuditorUpdate: Conversion from Diff/Auditor to Package went wrong"
 
+loadDiffIntoAuditorUpdateStillUsed :: String -> EitherT OperationError IO OperationResult
+loadDiffIntoAuditorUpdateStillUsed dbName = do
+  diffDeps <- liftIO $ queryDiff' dbName
+  audDeps  <- liftIO $ queryAuditor dbName
+  -- Convert 'Auditor' and 'Diff' to 'Packages'
+  let audPackages  = mapM audDepToPackage audDeps
+  let diffPackages = mapM diffDepToPackage diffDeps
+  case (audPackages, diffPackages) of
+    (Right aPkgs, Right dPkgs) -> do
+      let inCommonPkgs = pkgThruples aPkgs `intersect` pkgThruples dPkgs
+      let
+        updatedPackages =
+          [ x | x <- dPkgs, packageName x `elem` (map fst3 inCommonPkgs) ]
+      let final = map pkgToAuditor updatedPackages :: [Auditor]
+      liftIO $ print "From loadDiffIntoAuditorStillUsed"
+      liftIO $ print updatedPackages
+      mapM_ (updateAuditorEntryDirect dbName) final
+      liftIO $ clearDiffTable dbName
+      right UpdatedAuditorTableStillUsed
 
+updateAuditorEntryDirect
+  :: String -> Auditor -> EitherT OperationError IO OperationResult
+updateAuditorEntryDirect dbName updatedPackage = do
+  conn    <- liftIO $ open dbName
+  -- Updates corresponding package in auditor table.
+  liftIO $ runBeamSqlite conn $ runUpdate $ save (auditor auditorDb) updatedPackage
+
+  liftIO $ close conn
+  pure UpdatedAuditorTableStillUsed
 
 --------------------------------------------------------------------------------
 -- Hash Table Operations
@@ -284,15 +291,3 @@ audDepToText audDep = map
   , auditorStillUsed
   , auditorAnalysisStatus
   ]
-
--- TODO: Duplicated function
-pkgToAuditor :: Package -> Auditor
-pkgToAuditor (Package pName pVersion dateFS dDep sUsed aStatus) = do
-  let fTime = formatTime defaultTimeLocale "%F %X%Q" dateFS
-  Auditor
-    pName
-    pVersion
-    (pack fTime)
-    (pack $ show dDep)
-    (pack $ show sUsed)
-    (pack $ show aStatus)

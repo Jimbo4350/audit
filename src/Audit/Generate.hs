@@ -16,13 +16,13 @@ import System.Directory (getDirectoryContents)
 import System.Process (callCommand)
 
 import Audit.Operations
-  ( buildPackageList
+  ( buildParsedDependencyList
   , checkHash
   , deleteHash
   , insertAuditorDeps
   , insertHash
   , loadDiffIntoAuditorNew
-  , loadDiffIntoAuditorUpdate
+  , loadDiffIntoAuditorUpdateStillUsed
   )
 import Audit.Sorting
   ( allOriginalRepoVers
@@ -32,19 +32,17 @@ import Audit.Sorting
   , newIndirectDeps
   , newVersions
   , originalDirectDeps
-  , removedDeps
+  , removedDirDeps
   )
-import Audit.Database (DiffT(..))
 import Audit.Tree (directDeps, indirectDeps)
 import Audit.Types
-  (Command(..), HashStatus(..), OperationError(..), OperationResult(..),Package(..))
+  (Command(..), HashStatus(..), OperationError(..), OperationResult(..))
 import Data.Time.Clock (getCurrentTime)
 import Audit.DiffOperations
   ( clearDiffTable
   , loadNewDirDepsDiff
   , loadNewIndirectDepsDiff
-  , loadDiffTableRemovedDeps
-  , queryDiff'
+  , loadDiffTableRemovedDirDeps
   )
 
 -- | Checks if "auditor.db" exists in pwd, if not creates it with the
@@ -75,7 +73,7 @@ initializeDB :: IO ()
 initializeDB =
   callCommand
     "sqlite3 auditor.db \
-    \\"CREATE TABLE auditor ( package_id INTEGER PRIMARY KEY AUTOINCREMENT\
+    \\"CREATE TABLE auditor ( dependency_id INTEGER PRIMARY KEY AUTOINCREMENT\
                            \, package_name VARCHAR NOT NULL\
                            \, package_version VARCHAR NOT NULL\
                            \, date_first_seen VARCHAR NOT NULL\
@@ -84,13 +82,13 @@ initializeDB =
                            \, analysis_status VARCHAR NOT NULL);\
      \CREATE TABLE hash ( current_hash INT NOT NULL\
                            \, PRIMARY KEY ( current_hash )); \
-     \CREATE TABLE diff ( package_name VARCHAR NOT NULL\
+     \CREATE TABLE diff     ( dependency_id INTEGER PRIMARY KEY AUTOINCREMENT\
+                           \, package_name VARCHAR NOT NULL\
                            \, package_version VARCHAR NOT NULL\
                            \, date_first_seen VARCHAR NOT NULL\
                            \, direct_dep VARCHAR NOT NULL\
                            \, still_used VARCHAR NOT NULL\
-                           \, analysis_status VARCHAR NOT NULL\
-                           \, PRIMARY KEY( package_name, direct_dep )); \""
+                           \, analysis_status VARCHAR NOT NULL); \""
 
 
 ------------------------------Handler-----------------------------------
@@ -112,30 +110,11 @@ audit = do
                                  \been changed."
     HashDoesNotMatch -> do
       print "Hashes do not match, dependency tree has changed."
-      newDirDeps >>= (\x -> print $ "New dependencies: " ++ show x)
+      newDirDeps >>= (\x -> print $ "New direct dependencies: " ++ show x)
+      newIndirectDeps >>= (\x -> print $ "New indirect dependencies: " ++ show x)
       newVersions >>= (\x -> print $ "New dependency versions: " ++ show x)
-      removedDeps >>= (\x -> print $ "Removed dependencies: " ++ show x)
-      pVersions <- allUpdatedRepoVers
-      dDeps     <- newDirDeps
-      newInDeps <- newIndirectDeps
-
-      cTime     <- getCurrentTime
-      -- Add new direct dependencies to the Diff table
-      -- TODO: shift direct and indirect checks here and create custom
-      -- types for them to feed into loadNewDir* functions
-      queriedDiffDeps <- queryDiff' "auditor.db"
-      report =<< runEitherT
-        ( loadNewDirDepsDiff "auditor.db"
-        $ buildPackageList pVersions dDeps [] cTime
-        )
-
-      -- Add new indirect dependencies to the Diff table
-      report =<< runEitherT
-        ( loadNewIndirectDepsDiff "auditor.db"
-        $ buildPackageList pVersions [] newInDeps cTime
-        )
-
-      report =<< (runEitherT $ loadDiffTableRemovedDeps "auditor.db")
+      removedDirDeps >>= (\x -> print $ "Removed direct dependencies: " ++ show x)
+      pure ()
     HashNotFound -> do
       print "Hash not found, generating db."
       initializeDB
@@ -145,7 +124,7 @@ audit = do
       let pVersions' = [ bimap unpack unpack x | x <- pVersions ]
       cTime <- getCurrentTime
       let
-        packages = buildPackageList
+        packages = buildParsedDependencyList
           pVersions'
           (directDeps iDepTree)
           (indirectDeps iDepTree)
@@ -159,8 +138,8 @@ audit = do
 
 
 report :: Either OperationError OperationResult -> IO ()
-report (Right opRes) = putStrLn $ show opRes
-report (Left  e    ) = putStrLn $ renderOperationError e
+report (Right opRes) = print $ show opRes
+report (Left  e    ) = print $ renderOperationError e
 
 renderOperationError :: OperationError -> String
 renderOperationError (OnlyDirectDepenciesAllowed pkgs) =
@@ -172,15 +151,46 @@ renderOperationError (ConvError err) =
 
 update :: IO ()
 update = do
-  entries <- queryDiff' "auditor.db"
-  case entries of
-    [] -> print "Diff table empty"
+  pVersions <- allUpdatedRepoVers
+  dDeps     <- newDirDeps
+  newInDeps <- newIndirectDeps
+  cTime     <- getCurrentTime
+  remDirDeps <- removedDirDeps
+  -- TODO: new a new function that builds a complete parsed dependency list of
+  -- all removed, updated, added etc deps
+  case (buildParsedDependencyList pVersions dDeps newInDeps cTime, remDirDeps) of
+    ([],[]) -> print "No dependency updates detected."
     _  -> do
       print
         "Inserting changes from Diff table into \
                         \Auditor table.."
+
+      -- Add new direct dependencies to the Diff table
+
+      report =<< runEitherT
+        ( loadNewDirDepsDiff "auditor.db"
+        $ buildParsedDependencyList pVersions dDeps [] cTime
+        )
+
+      -- Add new indirect dependencies to the Diff table
+
+      report =<< runEitherT
+        ( loadNewIndirectDepsDiff "auditor.db"
+        $ buildParsedDependencyList pVersions [] newInDeps cTime
+        )
+
+      -- Load Diff's indirect and direct dependencies
+      -- into Auditor and clear the Diff table
       _ <- runEitherT $ loadDiffIntoAuditorNew "auditor.db"
-    --  _ <- runEitherT $ loadDiffIntoAuditorUpdate "auditor.db"
+
+      -- Add removed dependencies to the Diff table
+      report =<< (runEitherT $ loadDiffTableRemovedDirDeps "auditor.db")
+
+      -- Load Diff's removed dependencies into Auditor and clear the diff table
+
+      _ <- runEitherT $ loadDiffIntoAuditorUpdateStillUsed "auditor.db"
+
+
       print
         "Overwriting original repository dependency \
                         \tree & clearing Diff table"

@@ -1,20 +1,24 @@
 module Audit.Types
-       ( AnalysisStatus (..)
-       , Command (..)
-       , ConversionError (..)
-       , DirectDependency
-       , HashStatus (..)
-       , IndirectDependency
-       , OperationError (..)
-       , OperationResult (..)
-       , Package (..)
-       , PackageName
-       , QPResult(..)
-       , Version
-       ) where
+  ( AnalysisStatus(..)
+  , Command(..)
+  , ConversionError(..)
+  , DirectDependency
+  , HashStatus(..)
+  , IndirectDependency
+  , NewDependency(..)
+  , OperationError(..)
+  , OperationResult(..)
+  , Package(..)
+  , PackageName
+  , ParsedDependency(..)
+  , QPResult(..)
+  , Version
+  )
+where
 
-import           Data.Text          (Text)
-import           Data.Time.Clock    (UTCTime (..))
+import Data.Text (Text)
+import Data.Time.Clock (UTCTime(..))
+import Data.Int (Int32)
 
 
 data AnalysisStatus
@@ -47,8 +51,8 @@ data HashStatus = HashMatches
 type IndirectDependency = String
 
 data OperationError =
-   OnlyDirectDepenciesAllowed [Package]
- | OnlyIndirectDepenciesAllowed [Package]
+   OnlyDirectDepenciesAllowed [ParsedDependency]
+ | OnlyIndirectDepenciesAllowed [ParsedDependency]
  | ConvError ConversionError
  deriving Show
 
@@ -86,12 +90,26 @@ data OperationResult =
   | NoRemovedDependenciesToAdd
     -- ^ After parsing the '.dot' files no changes were detected i.e
     -- no dependencies were removed.
-
-
+  | UpdatedAuditorTableStillUsed
+    -- ^ Updated the 'stillUsed' flag for specific enteries in the
+    -- auditor table
   deriving Show
 
+
+newtype NewDependency = NewDependency { getNewDependency :: ParsedDependency }
+
+data ParsedDependency = ParsedDependency
+    { depName    :: Text
+    , depVersion :: Text
+    , firstSeen  :: UTCTime
+    , isDirect   :: Bool
+    , inUse      :: Bool
+    , aStatus    :: [AnalysisStatus]
+    } deriving (Eq, Ord,Show)
+
 data Package = Package
-    { packageName    :: Text
+    { packageId      :: Int32
+    , packageName    :: Text
     , packageVersion :: Text
     , dateFirstSeen  :: UTCTime
     , directDep      :: Bool

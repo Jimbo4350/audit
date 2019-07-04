@@ -11,13 +11,14 @@ module Audit.Sorting
        , newVersions
        , newDirDeps
        , originalDirectDeps
-       , removedDeps
+       , removedDirDeps
        , repoName
        , tuplesToList
+       , updatedDirectDeps
        ) where
 
 import           Data.Bifunctor (bimap)
-import           Data.List      (groupBy, nub, (\\))
+import           Data.List      (groupBy, nub, (\\), intersect)
 import           Data.Text      (Text, pack, unpack)
 import           Data.Tree      (Tree)
 import           Text.Parsec    (parse)
@@ -47,11 +48,18 @@ allUpdatedRepoDeps = do
         Left parserError -> error $ show parserError
         Right deps       -> return deps
 
+-- | This returns a list of all the indirect dependencies of the original
+-- repository.
 allOriginalRepoIndirDeps :: IO [IndirectDependency]
 allOriginalRepoIndirDeps = do
     allDeps <- allInitialDepsGrouped
+    -- NB: These direct dependencies may also be indirect dependencies
     dDeps <- originalDirectDeps
-    return $ nub (tuplesToList allDeps) \\ dDeps
+    let allDepsList = nub (tuplesToList allDeps)
+    -- Account for the possibility that a direct dependency is also
+    -- an indirect dependency
+    let dirAndIndirDeps = allDepsList `intersect` dDeps
+    return $ (allDepsList \\ dDeps) ++ dirAndIndirDeps
 
 -- | Returns all the packages in the repo and their versions. Again
 -- the repo itself is considered a package and is included. NB: The version
@@ -72,11 +80,11 @@ allUpdatedRepoVers = do
 
 -- | Returns all new indirect dependencies. NB: The hierarchy is lost and
 -- packages in this list could be dependencies of each other.
+-- Also a dependency that was a direct dependency previously, will be listed
+-- as a new indirect dependency
 newIndirectDeps :: IO [String]
 newIndirectDeps = do
-    aOrgDeps <- allOriginalRepoDeps
-    oDirDeps <- originalDirectDeps
-    let originalIndirDeps =  (nub . tuplesToList $ groupParseResults aOrgDeps) \\ oDirDeps
+    originalIndirDeps <- allOriginalRepoIndirDeps
     aUpdDeps <- allUpdatedRepoDeps
     uDirDeps <- updatedDirectDeps
     let updatedIndirDeps =  (nub . tuplesToList $ groupParseResults aUpdDeps) \\ uDirDeps
@@ -101,9 +109,9 @@ newVersions = do
     return $ filter (\x -> rName == fst x) newVers \\ oldVers
 
 -- | Checks for direct dependencies that were removed.
---removedDeps :: IO [(String, String)]
-removedDeps :: IO [String]
-removedDeps = do
+--removedDirDeps :: IO [(String, String)]
+removedDirDeps :: IO [String]
+removedDirDeps = do
     rName <- repoName
     oldDeps <- allOriginalRepoDeps
     newDeps <- allUpdatedRepoDeps
