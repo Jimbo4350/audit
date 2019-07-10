@@ -5,46 +5,43 @@ module Audit.Generate
   , audit
   , originalDirectDeps
   , update
+  , initializeDB
   )
 where
 
 import Control.Monad.Trans.Either (runEitherT)
-import Data.Bifunctor (bimap)
 import Data.Hashable (hash)
-import Data.Text (unpack)
 import System.Directory (getDirectoryContents)
 import System.Process (callCommand)
 
+import Audit.Conversion (compareParsedWithAuditor)
+import Audit.Database (AuditorT(..))
 import Audit.Operations
-  ( buildParsedDependencyList
+  ( newParsedDeps
   , checkHash
   , deleteHash
   , insertAuditorDeps
   , insertHash
-  , loadDiffIntoAuditorNew
-  , loadDiffIntoAuditorUpdateStillUsed
+  , updateAuditorEntryDirect
   )
+import Audit.Queries (queryAuditor)
 import Audit.Sorting
-  ( allOriginalRepoVers
-  , allUpdatedRepoVers
+  ( InitialDepVersions(..)
+  , parseAllOriginalRepoVers
+  , parseAllUpdatedRepoVers
   , initialDepTree
-  , newDirDeps
-  , newIndirectDeps
-  , newVersions
+  , filterNewDirDeps
+  , filterNewIndirectDeps
+  , filterNewVersions
+  , filterRemovedIndirectDeps
   , originalDirectDeps
-  , removedDirDeps
+  , filterRemovedDirDeps
   )
 import Audit.Tree (directDeps, indirectDeps)
 import Audit.Types
   (Command(..), HashStatus(..), OperationError(..), OperationResult(..))
 import Data.Time.Clock (getCurrentTime)
-import Audit.DiffOperations
-  ( clearDiffTable
-  , loadNewDirDepsDiff
-  , loadNewIndirectDepsDiff
-  , loadDiffTableRemovedDirDeps
-  )
-
+import Data.Text (pack)
 -- | Checks if "auditor.db" exists in pwd, if not creates it with the
 -- tables `auditor` (which holds all the dependency data) and `hash`
 -- which holds the hash of the existing .dot file.
@@ -64,21 +61,21 @@ checkDB = do
       checkHash "auditor.db" $ hash contents
     else return HashNotFound
 
-generateInitialDepFiles :: IO ()
-generateInitialDepFiles = do
+generateInitialDotFiles :: IO ()
+generateInitialDotFiles = do
   callCommand "stack dot --external > repoinfo/currentDepTree.dot"
   callCommand "stack ls dependencies > repoinfo/currentDepTreeVersions.txt"
 
-initializeDB :: IO ()
-initializeDB =
-  callCommand
-    "sqlite3 auditor.db \
+initializeDB :: String -> IO ()
+initializeDB dbName =
+  callCommand $
+    "sqlite3 " ++ dbName ++ " \
     \\"CREATE TABLE auditor ( dependency_id INTEGER PRIMARY KEY AUTOINCREMENT\
                            \, package_name VARCHAR NOT NULL\
                            \, package_version VARCHAR NOT NULL\
                            \, date_first_seen VARCHAR NOT NULL\
-                           \, direct_dep VARCHAR NOT NULL\
-                           \, still_used VARCHAR NOT NULL\
+                           \, direct_dep BOOL NOT NULL\
+                           \, still_used BOOL NOT NULL\
                            \, analysis_status VARCHAR NOT NULL);\
      \CREATE TABLE hash ( current_hash INT NOT NULL\
                            \, PRIMARY KEY ( current_hash )); \
@@ -104,28 +101,27 @@ audit = do
   hashStat <- checkDB
   case hashStat of
     HashMatches -> do
-      clearDiffTable "auditor.db"
       print
         "Hashes match, dependency tree has not \
                                  \been changed."
     HashDoesNotMatch -> do
       print "Hashes do not match, dependency tree has changed."
-      newDirDeps >>= (\x -> print $ "New direct dependencies: " ++ show x)
-      newIndirectDeps >>= (\x -> print $ "New indirect dependencies: " ++ show x)
-      newVersions >>= (\x -> print $ "New dependency versions: " ++ show x)
-      removedDirDeps >>= (\x -> print $ "Removed direct dependencies: " ++ show x)
+      filterNewDirDeps >>= (\x -> print $ "New direct dependencies: " ++ show x)
+      filterNewIndirectDeps >>= (\x -> print $ "New indirect dependencies: " ++ show x)
+      filterNewVersions >>= (\x -> print $ "New dependency versions: " ++ show x)
+      filterRemovedDirDeps >>= (\x -> print $ "Removed direct dependencies: " ++ show x)
+      filterRemovedIndirectDeps >>= (\x -> print $ "Removed indirect dependencies: " ++ show x)
       pure ()
     HashNotFound -> do
       print "Hash not found, generating db."
-      initializeDB
-      generateInitialDepFiles
-      pVersions <- allOriginalRepoVers
+      initializeDB "auditor.db"
+      generateInitialDotFiles
+      pVersions <- parseAllOriginalRepoVers
       iDepTree  <- initialDepTree
-      let pVersions' = [ bimap unpack unpack x | x <- pVersions ]
       cTime <- getCurrentTime
       let
-        packages = buildParsedDependencyList
-          pVersions'
+        packages = newParsedDeps
+          (initDeps pVersions)
           (directDeps iDepTree)
           (indirectDeps iDepTree)
           cTime
@@ -137,73 +133,100 @@ audit = do
         .   hash
 
 
-report :: Either OperationError OperationResult -> IO ()
-report (Right opRes) = print $ show opRes
-report (Left  e    ) = print $ renderOperationError e
+_report :: Either OperationError OperationResult -> IO ()
+_report (Right opRes) = print $ show opRes
+_report (Left  e    ) = print $ _renderOperationError e
 
-renderOperationError :: OperationError -> String
-renderOperationError (OnlyDirectDepenciesAllowed pkgs) =
+_renderOperationError :: OperationError -> String
+_renderOperationError (OnlyDirectDepenciesAllowed pkgs) =
   "The following packages are not direct dependencies: " <> show pkgs
-renderOperationError (OnlyIndirectDepenciesAllowed pkgs) =
+_renderOperationError (OnlyIndirectDepenciesAllowed pkgs) =
   "The following packages are not indirect dependencies: " <> show pkgs
-renderOperationError (ConvError err) =
+_renderOperationError (ConvError err) =
   "ConversionError: " <> show err
 
 update :: IO ()
 update = do
-  pVersions <- allUpdatedRepoVers
-  dDeps     <- newDirDeps
-  newInDeps <- newIndirectDeps
+  -- New dependencies (Add to Auditor table)
+  newVersions <- parseAllUpdatedRepoVers
+  newDDeps     <- filterNewDirDeps
+  newInDeps <- filterNewIndirectDeps
   cTime     <- getCurrentTime
-  remDirDeps <- removedDirDeps
-  -- TODO: new a new function that builds a complete parsed dependency list of
-  -- all removed, updated, added etc deps
-  case (buildParsedDependencyList pVersions dDeps newInDeps cTime, remDirDeps) of
-    ([],[]) -> print "No dependency updates detected."
+
+
+  allAuditorEntries <- queryAuditor "auditor.db"
+
+  -- Removed dependencies (change stillUsed flag)
+  remDirDepsPackageNames <- filterRemovedDirDeps
+
+  -- Removed indirect dependencies
+  remIndirDeps <- filterRemovedIndirectDeps
+
+  -- New dependencies
+  let newDeps = newParsedDeps newVersions newDDeps newInDeps cTime
+
+  case (newDeps, remDirDepsPackageNames, remIndirDeps) of
+    ([],[],[]) -> print "No dependency updates detected."
     _  -> do
-      print
-        "Inserting changes from Diff table into \
-                        \Auditor table.."
+      -- OVERALL FLOW. QUERY AUDITOR TABLE, USE LIST COMPREHENSION & PARSE RESULTS TO FILTER
+      -- THE ENTRY/ENTRIES YOU ARE LOOKING FOR.
 
-      -- Add new direct dependencies to the Diff table
+      -- New dependencies consits of two cases: actual never before seen dependencies
+      -- or when adding a direct dep (when the identical indirect dep exists)
+      -- or vice versa
 
-      report =<< runEitherT
-        ( loadNewDirDepsDiff "auditor.db"
-        $ buildParsedDependencyList pVersions dDeps [] cTime
-        )
+      -- Check to see if the new parsed deps results are already in auditor
+      let checkForNew = map compareParsedWithAuditor newDeps
+      let newDepsAlreadyInAuditor = [ aEntry {auditorStillUsed = True}
+                                    | aEntry <- allAuditorEntries
+                                    , f <- checkForNew
+                                    , f aEntry == True
+                                    ]
+      let dirDepsToBeRemovedAuditor = [ aEntry { auditorStillUsed = False}
+                                      | aEntry <- allAuditorEntries
+                                      , auditorPackageName aEntry `elem` map pack remDirDepsPackageNames
+                                      , auditorDirectDep aEntry == True
+                                      ]
+      let indirDepsToBeRemovedAuditor = [ aEntry {auditorStillUsed = False}
+                                        | aEntry <- allAuditorEntries
+                                        , auditorPackageName aEntry `elem` map pack remIndirDeps
+                                        , auditorDirectDep aEntry == False
+                                        ]
+      case (newDepsAlreadyInAuditor,dirDepsToBeRemovedAuditor, indirDepsToBeRemovedAuditor) of
+        -- Insert actual new dependencies
+        ([],[],[]) -> do
+          print $ "Inserting new dependencies:" ++ show newDDeps
+          insertAuditorDeps "auditor.db" newDeps
+          cleanUpAndUpdateHash
+        -- Update existing dependencies/ Add new dependencies (see above)
+        _ -> do
+            -- If this is a new dep already in the auditor, it means we have
+            -- re-added a direct dependency and need to adjust the stillUsed bool
 
-      -- Add new indirect dependencies to the Diff table
+            mapM_ (runEitherT . updateAuditorEntryDirect "auditor.db") newDepsAlreadyInAuditor
 
-      report =<< runEitherT
-        ( loadNewIndirectDepsDiff "auditor.db"
-        $ buildParsedDependencyList pVersions [] newInDeps cTime
-        )
+            -- Update removed dependencies (removedDirs = change DirectDep flag to false)
+            mapM_ (runEitherT . updateAuditorEntryDirect "auditor.db") dirDepsToBeRemovedAuditor
 
-      -- Load Diff's indirect and direct dependencies
-      -- into Auditor and clear the Diff table
-      _ <- runEitherT $ loadDiffIntoAuditorNew "auditor.db"
+            -- Update removed indirect dependencies
+            mapM_ (runEitherT . updateAuditorEntryDirect "auditor.db") indirDepsToBeRemovedAuditor
 
-      -- Add removed dependencies to the Diff table
-      report =<< (runEitherT $ loadDiffTableRemovedDirDeps "auditor.db")
+            print
+              "Overwriting original repository dependency \
+                              \tree & clearing Diff table"
+            cleanUpAndUpdateHash
 
-      -- Load Diff's removed dependencies into Auditor and clear the diff table
-
-      _ <- runEitherT $ loadDiffIntoAuditorUpdateStillUsed "auditor.db"
-
-
-      print
-        "Overwriting original repository dependency \
-                        \tree & clearing Diff table"
-      callCommand "stack dot --external > repoinfo/currentDepTree.dot"
-      print "Deleting old hash."
-      deleteHash "auditor.db"
-      -- `contents` will become the new hash
-      contents <- (++) <$> readFile "repoinfo/updatedDepTree.dot" <*> readFile
-        "repoinfo/updatedDepTreeVersions.txt"
-      -- Update hash in hash table
-      insertHash "auditor.db" $ hash contents
-      -- Delete the new dependencies (that was just added to the auditor table)
-      -- in the Diff table
-      clearDiffTable "auditor.db"
-      callCommand "rm repoinfo/updatedDepTreeVersions.txt"
-      callCommand "rm repoinfo/updatedDepTree.dot"
+cleanUpAndUpdateHash :: IO ()
+cleanUpAndUpdateHash = do
+  callCommand "stack dot --external > repoinfo/currentDepTree.dot"
+  print "Deleting old hash."
+  deleteHash "auditor.db"
+  -- `contents` will become the new hash
+  contents <- (++) <$> readFile "repoinfo/updatedDepTree.dot" <*> readFile
+    "repoinfo/updatedDepTreeVersions.txt"
+  -- Update hash in hash table
+  insertHash "auditor.db" $ hash contents
+  -- Delete the new dependencies (that was just added to the auditor table)
+  -- in the Diff table
+  callCommand "rm repoinfo/updatedDepTreeVersions.txt"
+  callCommand "rm repoinfo/updatedDepTree.dot"

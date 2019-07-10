@@ -16,7 +16,7 @@ import           Data.Semigroup      ((<>))
 import           Options.Applicative (Parser, help, long, metavar, strOption)
 import           Text.Parsec
 
-import           Audit.Types         (Command (..), PackageName, Version)
+import           Audit.Types         (Command (..),DependencyName, Version)
 
 -- | Returns name of the repo.
 packageName' :: Parsec String () String
@@ -33,7 +33,7 @@ allDependencies = do
     directDependancies `sepEndBy` newline
 
 -- | Returns all package versions.
-versions :: Parsec String () [(PackageName, Version)]
+versions :: Parsec String () [(DependencyName, Version)]
 versions = dependencyVersion `sepEndBy` newline
 
 ------------------------------Helper Parsers-----------------------------------
@@ -45,7 +45,7 @@ directDependancies = do
     _ <- space *> string "->" *> space
     dependency <- stringParse
     _ <- char ';'
-    return $ (package, dependency)
+    return (package, dependency)
 
 -- | Removes "strict digraph deps {"
 digraphRemoval :: Parsec String () [String]

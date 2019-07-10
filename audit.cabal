@@ -28,7 +28,6 @@ library
       Audit.AuditorOperations
       Audit.Conversion
       Audit.Database
-      Audit.DiffOperations
       Audit.Generate
       Audit.Operations
       Audit.Parser

@@ -6,9 +6,9 @@ module Audit.AuditorOperations
   )
 where
 
-import Audit.Conversion (parsedDepToAudQExpr, pkgToAuditor)
+import Audit.Conversion (parsedDepToAudQExpr)
 import Audit.Database (Auditor, AuditorDb(..), AuditorT(..), auditorDb)
-import Audit.Types (Package(..), ParsedDependency(..))
+import Audit.Types (ParsedDependency(..))
 import Database.Beam
 
 import Database.Beam.Sqlite.Connection (runBeamSqlite)
