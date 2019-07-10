@@ -48,7 +48,6 @@ library
     , containers
     , directory
     , hashable
-    , aeson
     , hedgehog
     , mtl
     , optparse-applicative

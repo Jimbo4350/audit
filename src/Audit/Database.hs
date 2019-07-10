@@ -1,7 +1,6 @@
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE StandaloneDeriving    #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeSynonymInstances  #-}
@@ -20,25 +19,17 @@ module Audit.Database
 where
 
 import Data.Text (Text)
+import Data.Int (Int32)
 
 import Database.Beam
-  ( Beamable
-  , Columnar
-  , Database
-  , DatabaseSettings
-  , Generic
-  , Identity
-  , PrimaryKey(..)
-  , Table(..)
-  , TableEntity
-  , defaultDbSettings
-  )
+import Database.Beam.Sqlite.Connection (Sqlite)
 
 -- | Auditor Table. Stores the current direct, indirect and
 -- removed dependencies.
 
 data AuditorT f = Auditor
-  { auditorPackageName    :: Columnar f Text
+  { auditorDependencyId   :: Columnar f Int32
+  , auditorPackageName    :: Columnar f Text
   , auditorPackageVersion :: Columnar f Text
   , auditorDateFirstSeen  :: Columnar f Text
   , auditorDirectDep      :: Columnar f Text
@@ -54,8 +45,8 @@ deriving instance Show Auditor
 instance Beamable AuditorT
 
 instance Table AuditorT where
-  data PrimaryKey AuditorT f = NoPrimaryKey deriving Generic
-  primaryKey _ = NoPrimaryKey
+  data PrimaryKey AuditorT f = AuditorDependencyId (Columnar f Int32) deriving Generic
+  primaryKey = AuditorDependencyId . auditorDependencyId
 
 instance Beamable (PrimaryKey AuditorT)
 
@@ -83,7 +74,8 @@ instance Beamable (PrimaryKey HashT)
 -- stores any changes to the dependency tree.
 
 data DiffT f = Diff
-  { diffPackageName    :: Columnar f Text
+  { diffDependencyId   :: Columnar f Int32
+  , diffPackageName    :: Columnar f Text
   , diffPackageVersion :: Columnar f Text
   , diffDateFirstSeen  :: Columnar f Text
   , diffDirectDep      :: Columnar f Text
@@ -100,8 +92,9 @@ deriving instance Show Diff
 instance Beamable DiffT
 
 instance Table DiffT where
-  data PrimaryKey DiffT f = DiffPackageName (Columnar f Text) deriving Generic
-  primaryKey = DiffPackageName . diffPackageName
+  data PrimaryKey DiffT f = DiffDependencyId (Columnar f Int32) deriving Generic
+  primaryKey = DiffDependencyId . diffDependencyId
+
 
 instance Beamable (PrimaryKey DiffT)
 
@@ -115,5 +108,5 @@ data AuditorDb f = AuditorDb
 
 instance Database be AuditorDb
 
-auditorDb :: DatabaseSettings be AuditorDb
+auditorDb :: DatabaseSettings Sqlite AuditorDb
 auditorDb = defaultDbSettings
