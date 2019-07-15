@@ -4,13 +4,12 @@ module Audit.Queries
   ( queryAuditor
   , queryAuditorDepVersions
   , queryAuditorRemovedDeps
-  , queryDiffRemovedDeps
   , queryHash
   )
 where
 
 import Audit.Database
-  (Auditor, AuditorDb(..), AuditorT(..), DiffT(..), Hash, auditorDb)
+  (Auditor, AuditorDb(..), AuditorT(..), Hash, auditorDb)
 import Data.Text (Text)
 import Database.Beam
   (all_, runSelectReturningList, runSelectReturningOne, select)
@@ -40,17 +39,8 @@ queryAuditorRemovedDeps dbName = do
   let allEntries = all_ (auditor auditorDb)
   entries <- runBeamSqlite conn $ runSelectReturningList $ select allEntries
   close conn
-  let remDeps = filter (\x -> auditorStillUsed x == "False") entries
+  let remDeps = filter (\x -> auditorStillUsed x == False) entries
   return $ map auditorPackageName remDeps
-
-queryDiffRemovedDeps :: String -> IO [Text]
-queryDiffRemovedDeps dbName = do
-  conn <- open dbName
-  let allEntries = all_ (diff auditorDb)
-  entries <- runBeamSqlite conn $ runSelectReturningList $ select allEntries
-  close conn
-  let remDeps = filter (\x -> diffStillUsed x == "False") entries
-  return $ map diffPackageName remDeps
 
 -- | Query and returns the hash in db.
 queryHash :: String -> IO (Maybe Hash)

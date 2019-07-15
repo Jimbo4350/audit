@@ -12,15 +12,13 @@ module Test.Audit.Gen
   , genSimpleDepList
   , genUTCTime
   , populateAuditorTempDb
-  , populateDiffTempDb
   )
 where
 
-import Audit.Operations (buildParsedDependencyList, insertAuditorDeps)
-import Audit.DiffOperations (loadDiffTableNewDepsOnly)
+import Audit.Operations (newParsedDeps, insertAuditorDeps)
 import Audit.Sorting (groupParseResults)
 import Audit.Tree (buildDepTree, directDeps, indirectDeps)
-import Audit.Types (AnalysisStatus(..), Package(..))
+import Audit.Types (AnalysisStatus(..), Package(..), ParsedDependency)
 import qualified Data.Text
 import Data.Time.Calendar (Day(..))
 import Data.Time.Clock
@@ -43,6 +41,7 @@ genAnalysisStatus = Gen.list
 -- | Generate a direct dependency
 genDirectPackage :: Gen Package
 genDirectPackage = do
+  pId      <- Gen.int32 Range.constantBounded
   pName    <- genPackageName
   pVersion <- genPackageVersion
   pTime    <- genUTCTime
@@ -50,6 +49,7 @@ genDirectPackage = do
   sUsed    <- Gen.bool
   aStat    <- genAnalysisStatus
   pure $ Package
+    pId
     (Data.Text.pack pName)
     (Data.Text.pack pVersion)
     pTime
@@ -60,6 +60,7 @@ genDirectPackage = do
 -- | Generate an indirect dependency
 genIndirectPackage :: Gen Package
 genIndirectPackage = do
+  pId      <- Gen.int32 Range.constantBounded
   pName    <- genPackageName
   pVersion <- genPackageVersion
   pTime    <- genUTCTime
@@ -67,6 +68,7 @@ genIndirectPackage = do
   sUsed    <- Gen.bool
   aStat    <- genAnalysisStatus
   pure $ Package
+    pId
     (Data.Text.pack pName)
     (Data.Text.pack pVersion)
     pTime
@@ -94,6 +96,7 @@ genPackageVersion = concat <$> sequence
 
 genPackage :: Gen Package
 genPackage = do
+  pId      <- Gen.int32 Range.constantBounded
   pName    <- genPackageName
   pVersion <- genPackageVersion
   pTime    <- genUTCTime
@@ -101,6 +104,7 @@ genPackage = do
   sUsed    <- Gen.bool
   aStat    <- genAnalysisStatus
   pure $ Package
+    pId
     (Data.Text.pack pName)
     (Data.Text.pack pVersion)
     pTime
@@ -111,12 +115,14 @@ genPackage = do
 
 genRemovedPackage :: Gen Package
 genRemovedPackage = do
+  pId      <- Gen.int32 Range.constantBounded
   pName    <- genPackageName
   pVersion <- genPackageVersion
   pTime    <- genUTCTime
   dDep     <- Gen.bool
   aStat    <- genAnalysisStatus
   pure $ Package
+    pId
     (Data.Text.pack pName)
     (Data.Text.pack pVersion)
     pTime
@@ -143,7 +149,7 @@ genUTCTime = do
   pure $ UTCTime (ModifiedJulianDay day) (secondsToDiffTime diffTime)
 
 -- | Note this does not create the database.
-populateAuditorTempDb :: GenT IO [Package]
+populateAuditorTempDb :: GenT IO [ParsedDependency]
 populateAuditorTempDb = do
   -- Generate packages with versions.
   xs <- generalize genSimpleDepList
@@ -152,22 +158,7 @@ populateAuditorTempDb = do
   versions <- generalize $ genNameVersions (dDeps ++ inDeps)
 
   -- Populate auditor table with initial deps.
-  cTime    <- liftIO $ getCurrentTime
-  let packages = buildParsedDependencyList versions dDeps inDeps cTime
+  cTime    <- liftIO getCurrentTime
+  let packages = newParsedDeps versions dDeps inDeps cTime
   liftIO $ insertAuditorDeps "temp.db" packages
-  return packages
-
-  -- | Note this does not create the database.
-populateDiffTempDb :: GenT IO [Package]
-populateDiffTempDb = do
-  -- Generate packages with versions.
-  xs <- generalize genSimpleDepList
-  let dDeps  = directDeps $ buildDepTree "MainRepository" xs
-  let inDeps = indirectDeps $ buildDepTree "MainRepository" xs
-  versions <- generalize $ genNameVersions (dDeps ++ inDeps)
-
-  -- Populate auditor table with initial deps.
-  cTime    <- liftIO $ getCurrentTime
-  let packages = buildParsedDependencyList versions dDeps inDeps cTime
-  liftIO . runEitherT $ loadDiffTableNewDepsOnly "temp.db" packages
   return packages

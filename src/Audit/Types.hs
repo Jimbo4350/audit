@@ -9,7 +9,7 @@ module Audit.Types
   , OperationError(..)
   , OperationResult(..)
   , Package(..)
-  , PackageName
+  , DependencyName
   , ParsedDependency(..)
   , QPResult(..)
   , Version
@@ -118,7 +118,7 @@ data Package = Package
     } deriving (Eq, Ord, Show)
 
 
-type PackageName = String
+type DependencyName = String
 
 -- | 'QPResult a' captures the difference
 -- between a database query of dependencies and
