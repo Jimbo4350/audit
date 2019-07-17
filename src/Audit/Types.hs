@@ -16,9 +16,9 @@ module Audit.Types
   )
 where
 
-import Data.Text (Text)
-import Data.Time.Clock (UTCTime(..))
-import Data.Int (Int32)
+import           Data.Text                      ( Text )
+import           Data.Time.Clock                ( UTCTime(..) )
+import           Data.Int                       ( Int32 )
 
 
 data AnalysisStatus
@@ -36,6 +36,7 @@ newtype Command = Command String
 data ConversionError =
      UTCTimeParseError String
   |  DiffToAuditorError Text
+  |  NewlyParsedDepDoesNotExistInDb
   deriving Show
 
 type DirectDependency = String
@@ -54,6 +55,7 @@ data OperationError =
    OnlyDirectDepenciesAllowed [ParsedDependency]
  | OnlyIndirectDepenciesAllowed [ParsedDependency]
  | ConvError ConversionError
+ | NotInAuditorTable String
  deriving Show
 
 data OperationResult =

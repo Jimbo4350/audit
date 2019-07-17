@@ -6,14 +6,21 @@ module Audit.AuditorOperations
   )
 where
 
-import Audit.Conversion (parsedDepToAudQExpr)
-import Audit.Database (Auditor, AuditorDb(..), AuditorT(..), auditorDb)
-import Audit.Types (ParsedDependency(..))
-import Database.Beam
+import           Audit.Conversion               ( parsedDepToAudQExpr )
+import           Audit.Database                 ( Auditor
+                                                , AuditorDb(..)
+                                                , AuditorT(..)
+                                                , auditorDb
+                                                )
+import           Audit.Types                    ( ParsedDependency(..) )
 
-import Database.Beam.Sqlite.Connection (runBeamSqlite)
-import Database.SQLite.Simple (close, open)
-import Data.Text (Text)
+import           Database.Beam
+import           Database.Beam.Sqlite.Connection
+                                                ( runBeamSqlite )
+import           Database.SQLite.Simple         ( close
+                                                , open
+                                                )
+import           Data.Text                      ( Text )
 
 --------------------------------------------------------------------------------
 -- Auditor Table Operations
@@ -48,16 +55,15 @@ insertAuditorDeps dbFilename pkgs = do
   let audExp = map parsedDepToAudQExpr pkgs
   conn <- open dbFilename
   runBeamSqlite conn
-      $ runInsert
-      $ insert (auditor auditorDb)
-      $ insertExpressions audExp
+    $ runInsert
+    $ insert (auditor auditorDb)
+    $ insertExpressions audExp
   close conn
 
 queryAuditorDepNames :: String -> IO [Text]
-queryAuditorDepNames dbName  = do
-    conn <- open dbName
-    let allEntries = all_ (auditor auditorDb)
-    entries <- runBeamSqlite conn $
-        runSelectReturningList $ select allEntries
-    close conn
-    return $ map auditorPackageName entries
+queryAuditorDepNames dbName = do
+  conn <- open dbName
+  let allEntries = all_ (auditor auditorDb)
+  entries <- runBeamSqlite conn $ runSelectReturningList $ select allEntries
+  close conn
+  return $ map auditorPackageName entries

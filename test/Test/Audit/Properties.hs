@@ -3,120 +3,135 @@
 
 module Test.Audit.Properties where
 
-import Audit.Generate (initializeDB)
-import Control.Exception (bracket_)
-import Control.Monad.IO.Class
-import Control.Monad.Trans.Either (runEitherT)
-import Data.Bifunctor (bimap)
-import Data.Either (rights)
-import Data.List (all, sort)
-import Data.Text (pack, unpack)
-import Data.Time.Clock (getCurrentTime)
-import Data.Time.Format (defaultTimeLocale, formatTime)
-import Database.SQLite.Simple (SQLError)
-import Data.Set (difference, fromList, toList)
-import GHC.Stack (HasCallStack, withFrozenCallStack)
-import Hedgehog
-import qualified Hedgehog.Gen as Gen
-import Hedgehog.Internal.Property
-  ( Property
-  , TestLimit
-  , assert
-  , evalM
-  , evalEither
-  , failWith
-  , forAll
-  , forAllT
-  , property
-  , withTests
-  , (===)
-  )
-import qualified Hedgehog.Range as Range
-import System.Process (callCommand)
 
-import Audit.Conversion (packageToParsedDep)
-import Audit.Database (Auditor, AuditorT(..), HashT(..))
-import Audit.Operations
-  ( newParsedDeps
-  , clearAuditorTable
-  , deleteHash
-  , insertAuditorDeps
-  , insertHash
-  )
+import           Audit.Generate                 ( initializeDB )
+import           Audit.Conversion               ( packageToParsedDep
+                                                , auditorEntryToParsedDep
+                                                , compareParsedWithAuditor
+                                                , returnUpdatedAuditorEntry
+                                                , updatedAuditorValues
+                                                , auditorEntryToNotUsed
+                                                )
+import           Audit.Database                 ( Auditor
+                                                , AuditorT(..)
+                                                , HashT(..)
+                                                )
+import           Audit.Operations               ( newParsedDeps
+                                                , clearAuditorTable
+                                                , deleteHash
+                                                , getDirAudEntryByDepName
+                                                , insertAuditorDeps
+                                                , insertHash
+                                                , updateAuditorEntryDirect
+                                                , getInDirAudEntryByDepName
+                                                )
 
-import Audit.Queries
-  ( queryAuditor
-  , queryAuditorDepVersions
-  , queryAuditorRemovedDeps
-  , queryHash
-  )
-import Audit.Tree (buildDepTree, directDeps, indirectDeps)
-import Audit.Types (Package(..), QPResult(..), ParsedDependency(..))
-import Test.Audit.Gen
-  ( genDirectPackage
-  , genHash
-  , genIndirectPackage
-  , genNameVersions
-  , genPackage
-  , genRemovedPackage
-  , genSimpleDepList
-  , populateAuditorTempDb
-  )
+import           Audit.Queries                  ( queryAuditor
+                                                , queryAuditorDepVersions
+                                                , queryAuditorRemovedDeps
+                                                , queryHash
+                                                )
+import           Audit.Tree                     ( buildDepTree
+                                                , directDeps
+                                                , indirectDeps
+                                                )
+import           Audit.Types                    ( Package(..)
+                                                , QPResult(..)
+                                                , ParsedDependency(..)
+                                                )
+import           Test.Audit.Gen                 ( genDirectParsedDependency
+                                                , genHash
+                                                , genIndirectParsedDependency
+                                                , genNameVersions
+                                                , genPackage
+                                                , genRemovedPackage
+                                                , genSimpleDepList
+                                                , populateAuditorTempDb
+                                                )
+
+
+import           Control.Exception              ( bracket_ )
+import           Control.Monad.IO.Class
+import           Control.Monad.Trans.Either     ( runEitherT )
+import           Data.Bifunctor                 ( bimap )
+import           Data.Either                    ( rights )
+import           Data.List                      ( all
+                                                , sort
+                                                )
+import           Data.Text                      ( pack
+                                                , unpack
+                                                )
+import           Data.Time.Clock                ( getCurrentTime )
+import           Data.Time.Format               ( defaultTimeLocale
+                                                , formatTime
+                                                )
+import           Database.SQLite.Simple         ( SQLError )
+import           Data.Set                       ( difference
+                                                , fromList
+                                                , toList
+                                                )
+import           GHC.Stack                      ( HasCallStack
+                                                , withFrozenCallStack
+                                                )
+import           Hedgehog
+import qualified Hedgehog.Gen                  as Gen
+import           Hedgehog.Internal.Property     ( Property
+                                                , TestLimit
+                                                , assert
+                                                , evalM
+                                                , evalEither
+                                                , failWith
+                                                , forAll
+                                                , forAllT
+                                                , property
+                                                , withTests
+                                                , (===)
+                                                )
+import qualified Hedgehog.Range                as Range
+import           System.Process                 ( callCommand )
+
 
 
 -- | Makes sure that no information is lost in `newParsedDeps`
 prop_newParsedDeps :: Property
-prop_newParsedDeps =
-  withTests 100
-    . property
-    $ do
+prop_newParsedDeps = withTests 100 . property $ do
         -- Generate packages with versions.
-        xs <- forAll genSimpleDepList
-        let dDeps  = directDeps $ buildDepTree "MainRepository" xs
-        let inDeps = indirectDeps $ buildDepTree "MainRepository" xs
-        versions <- forAll $ genNameVersions (dDeps ++ inDeps)
+  xs <- forAll genSimpleDepList
+  let dDeps  = directDeps $ buildDepTree "MainRepository" xs
+  let inDeps = indirectDeps $ buildDepTree "MainRepository" xs
+  versions <- forAll $ genNameVersions (dDeps ++ inDeps)
 
-        cTime    <- liftIO getCurrentTime
-        -- Build `Package` list
-        let pkgs      = newParsedDeps versions dDeps inDeps cTime
+  cTime    <- liftIO getCurrentTime
+  -- Build `Package` list
+  let pkgs      = newParsedDeps versions dDeps inDeps cTime
 
-        -- Build direct dependencies only
-        let dirPkgs   = newParsedDeps versions dDeps [] cTime
+  -- Build direct dependencies only
+  let dirPkgs   = newParsedDeps versions dDeps [] cTime
 
-        -- Build direct dependencies only
-        let indirPkgs = newParsedDeps versions [] inDeps cTime
-
-
-        -- Deconstruct `Packages`s to strings
-        let
-          dDeps' =
-            map (unpack . depName) (filter (\x -> isDirect x == True) pkgs)
-        let
-          inDeps' = map
-            (unpack . depName)
-            (filter (\x -> isDirect x == False) pkgs)
-        let
-          versions' =
-            map (\x -> (unpack $ depName x, unpack $ depVersion x)) pkgs
-        -- From direct packages
-        let
-          dDeps'' = map
-            (unpack . depName)
-            (filter (\x -> isDirect x == True) dirPkgs)
-        -- From indirect packages
-        let
-          inDeps'' = map
-            (unpack . depName)
-            (filter (\x -> isDirect x == False) indirPkgs)
+  -- Build direct dependencies only
+  let indirPkgs = newParsedDeps versions [] inDeps cTime
 
 
-        -- Compare
-        dDeps' === dDeps
-        inDeps' === inDeps
-        versions' === versions
+  -- Deconstruct `Packages`s to strings
+  let dDeps' = map (unpack . depName) (filter (\x -> isDirect x == True) pkgs)
+  let inDeps' =
+        map (unpack . depName) (filter (\x -> isDirect x == False) pkgs)
+  let versions' = map (\x -> (unpack $ depName x, unpack $ depVersion x)) pkgs
+  -- From direct packages
+  let dDeps'' =
+        map (unpack . depName) (filter (\x -> isDirect x == True) dirPkgs)
+  -- From indirect packages
+  let inDeps'' =
+        map (unpack . depName) (filter (\x -> isDirect x == False) indirPkgs)
 
-        dDeps'' === dDeps
-        inDeps'' === inDeps
+
+  -- Compare
+  dDeps' === dDeps
+  inDeps' === inDeps
+  versions' === versions
+
+  dDeps'' === dDeps
+  inDeps'' === inDeps
 
 
 prop_clearAuditorTable :: Property
@@ -126,7 +141,7 @@ prop_clearAuditorTable = withTests 100 . property $ do
   potentialValues <- liftIO $ queryAuditor "temp.db"
   potentialValues === []
 
-
+-- TODO: Redo this property
 --prop_deleteAuditorEntry :: Property
 --prop_deleteAuditorEntry = do
 --  withTests 100 . property $ do
@@ -163,25 +178,144 @@ prop_deleteHash = withTests 100 . property $ do
 -- It then compares what was inserted into the
 -- database to what was queried from the database.
 prop_insertAuditorDeps :: Property
-prop_insertAuditorDeps =
-  withTests 100
-    . property
-    $ do
+prop_insertAuditorDeps = withTests 100 . property $ do
         -- Uses 'insertAuditorDeps' to populate a the auditor table with
         -- simulated newly parsed dependences.
-        parsedDeps <- forAllT populateAuditorTempDb
+  parsedDeps <- forAllT populateAuditorTempDb
 
-        -- Query auditor table.
-        queried  <- liftIO $ queryAuditor "temp.db"
+  -- Query auditor table.
+  queried    <- liftIO $ queryAuditor "temp.db"
+  liftIO $ clearAuditorTable "temp.db"
+
+  -- Compare generated `Package` with `Package` added to auditor table.
+  map isDirect parsedDeps === map auditorDirectDep queried
+  map depName parsedDeps === map auditorPackageName queried
+  map inUse parsedDeps === map auditorStillUsed queried
+  map depVersion parsedDeps === map auditorPackageVersion queried
+  map firstSeen parsedDeps === map auditorDateFirstSeen queried
+  map (pack . show . aStatus) parsedDeps === map auditorAnalysisStatus queried
+
+
+-- | Inserts a new direct dependency that already exists
+-- as an indirect dependency in the `Auditor` table. This
+-- makes sure that the insertion of the new dependency adds
+-- a new row and labels it appropriately without modifying
+-- the exisisting identical indirect dependency entry.
+
+prop_insertNewDirectDependency :: Property
+prop_insertNewDirectDependency =
+      withTests 100
+    . property
+    $ do
+        indirParDep <- forAll genIndirectParsedDependency
+        liftIO $ insertAuditorDeps "temp.db" [indirParDep]
+
+        let identicalDirDep = indirParDep { isDirect = True }
+        liftIO $ insertAuditorDeps "temp.db" [identicalDirDep]
+
+        deps <- liftIO $ queryAuditor "temp.db"
         liftIO $ clearAuditorTable "temp.db"
+        let parsedDepsFromAud = map auditorEntryToParsedDep deps
+        mapM evalEither parsedDepsFromAud
 
-        -- Compare generated `Package` with `Package` added to auditor table.
-        map isDirect parsedDeps === map auditorDirectDep queried
-        map depName parsedDeps === map auditorPackageName queried
-        map inUse parsedDeps === map auditorStillUsed queried
-        map depVersion parsedDeps === map auditorPackageVersion queried
-        map firstSeen parsedDeps === map auditorDateFirstSeen queried
-        map (pack . show . aStatus ) parsedDeps === map auditorAnalysisStatus queried
+        rights parsedDepsFromAud === [indirParDep, identicalDirDep]
+
+-- | Newly parsed dependencies that already exist in the `Auditor` table
+-- Check that the relevant enteries are correctly updated in the `Auditor` table.
+prop_updateExistingDepStillUsed :: Property
+prop_updateExistingDepStillUsed = withTests 100 . property $ do
+    -- Populate db with dependency
+  parsedDep <- forAll
+    $ Gen.choice [genDirectParsedDependency, genIndirectParsedDependency]
+  liftIO $ insertAuditorDeps "temp.db" [parsedDep]
+
+  -- Create dependencies that are identical except the still used flag is switched
+  deps <- liftIO $ queryAuditor "temp.db"
+  let simulatedNewlyParsedUpdatedDep =
+        parsedDep { inUse = not $ inUse parsedDep }
+
+  -- Update the db
+  let updatedAuditorVals =
+        updatedAuditorValues deps [simulatedNewlyParsedUpdatedDep]
+  liftIO . runEitherT $ mapM (updateAuditorEntryDirect "temp.db")
+                             updatedAuditorVals
+
+  updatedDeps <- liftIO $ queryAuditor "temp.db"
+  liftIO $ clearAuditorTable "temp.db"
+  updatedAuditorVals === updatedDeps
+
+-- | Direct dependencies have been removed and detected by the parsers.
+-- Update the Auditor table to reflect this.
+prop_updateRemovedDirectDependency :: Property
+prop_updateRemovedDirectDependency = withTests 100 . property $ do
+        -- Populate db with dependency
+  parsedDep <- forAll
+    $ Gen.choice [genDirectParsedDependency, genIndirectParsedDependency]
+  liftIO $ insertAuditorDeps "temp.db" [parsedDep]
+  initialDeps <- liftIO $ queryAuditor "temp.db"
+
+  -- Create removed dependency names
+  -- NB: When a dependency is removed
+  -- only the db has its relevant information
+  -- and therefore you must query the db
+  -- to rebuild the dependency correctly.
+  let remDep = unpack $ depName parsedDep
+
+  -- Retrieve removed dependency information from the Auditor table
+  eitherDirDepsToBeRemovedAuditor <- liftIO
+    $ mapM (runEitherT . getDirAudEntryByDepName "temp.db") [remDep]
+
+  -- Update the retrieved values to reflect the removal of the given dependencies.
+  let updatedAuditorValues =
+        map auditorEntryToNotUsed $ rights eitherDirDepsToBeRemovedAuditor
+
+  -- Update the db
+  liftIO $ mapM (runEitherT . updateAuditorEntryDirect "temp.db")
+                updatedAuditorValues
+  updatedDeps <- liftIO $ queryAuditor "temp.db"
+  case updatedAuditorValues of
+    [] -> do
+      liftIO $ clearAuditorTable "temp.db"
+      updatedDeps === initialDeps
+    _ -> do
+      liftIO $ clearAuditorTable "temp.db"
+      updatedAuditorValues === updatedDeps
+
+-- | Indirect dependencies have been removed and detected by the parsers.
+-- Update the Auditor table to reflect this.
+prop_updateRemovedIndirectDependency :: Property
+prop_updateRemovedIndirectDependency = withTests 100 . property $ do
+        -- Populate db with dependency
+  parsedDep <- forAll genIndirectParsedDependency
+  liftIO $ insertAuditorDeps "temp.db" [parsedDep]
+  initialDeps <- liftIO $ queryAuditor "temp.db"
+
+  -- Create removed dependency name
+  -- NB: When a dependency is removed
+  -- only the db has its relevant information
+  -- and therefore you must query the db
+  -- to rebuild the dependency correctly.
+  let remDep = unpack $ depName parsedDep
+
+  -- Retrieve removed dependency information from the Auditor table
+  eitherIndirDepsToBeRemovedAuditor <- liftIO
+    $ mapM (runEitherT . getInDirAudEntryByDepName "temp.db") [remDep]
+
+  -- Update the retrieved values to reflect the removal of the given dependencies.
+  let updatedAuditorValues =
+        map auditorEntryToNotUsed $ rights eitherIndirDepsToBeRemovedAuditor
+
+  -- Update the db
+  liftIO $ mapM (runEitherT . updateAuditorEntryDirect "temp.db")
+                updatedAuditorValues
+  updatedDeps <- liftIO $ queryAuditor "temp.db"
+  case updatedAuditorValues of
+    [] -> do
+      liftIO $ clearAuditorTable "temp.db"
+      updatedDeps === initialDeps
+    _ -> do
+      liftIO $ clearAuditorTable "temp.db"
+      updatedAuditorValues === updatedDeps
 
 
 
@@ -199,4 +333,3 @@ withTempDB = bracket_ tempDb remTempDb
   tempDb = initializeDB "temp.db"
   remTempDb :: IO ()
   remTempDb = callCommand "rm temp.db"
-

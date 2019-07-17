@@ -1,8 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Test.Audit.Gen
-  ( genDirectPackage
-  , genIndirectPackage
+  ( genAnalysisStatus
+  , genAuditor
+  , genDirectParsedDependency
+  , genIndirectParsedDependency
   , genHash
   , genNameVersions
   , genPackage
@@ -15,20 +17,35 @@ module Test.Audit.Gen
   )
 where
 
-import Audit.Operations (newParsedDeps, insertAuditorDeps)
-import Audit.Sorting (groupParseResults)
-import Audit.Tree (buildDepTree, directDeps, indirectDeps)
-import Audit.Types (AnalysisStatus(..), Package(..), ParsedDependency)
-import qualified Data.Text
-import Data.Time.Calendar (Day(..))
-import Data.Time.Clock
-  (DiffTime(..), UTCTime(..), getCurrentTime, secondsToDiffTime)
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.Trans.Either (runEitherT)
-import Hedgehog
-import qualified Hedgehog.Gen as Gen
-import Hedgehog.Internal.Gen (generalize)
-import qualified Hedgehog.Range as Range
+import           Audit.Database                 ( Auditor
+                                                , AuditorT(..)
+                                                )
+import           Audit.Operations               ( newParsedDeps
+                                                , insertAuditorDeps
+                                                )
+import           Audit.Sorting                  ( groupParseResults )
+import           Audit.Tree                     ( buildDepTree
+                                                , directDeps
+                                                , indirectDeps
+                                                )
+import           Audit.Types                    ( AnalysisStatus(..)
+                                                , Package(..)
+                                                , ParsedDependency(..)
+                                                )
+
+import           Data.Text                      ( pack )
+import           Data.Time.Calendar             ( Day(..) )
+import           Data.Time.Clock                ( DiffTime(..)
+                                                , UTCTime(..)
+                                                , getCurrentTime
+                                                , secondsToDiffTime
+                                                )
+import           Control.Monad.IO.Class         ( liftIO )
+import           Control.Monad.Trans.Either     ( runEitherT )
+import           Hedgehog
+import qualified Hedgehog.Gen                  as Gen
+import           Hedgehog.Internal.Gen          ( generalize )
+import qualified Hedgehog.Range                as Range
 
 
 genAnalysisStatus :: Gen [AnalysisStatus]
@@ -38,43 +55,39 @@ genAnalysisStatus = Gen.list
     [ASGhcBoot, ASCommon, ASCritical, ASCrypto, ASUncategoried, ASNewDependency]
   )
 
+genAuditor :: Gen Auditor
+genAuditor = do
+  parDep <- Gen.choice [genDirectParsedDependency, genIndirectParsedDependency]
+  pId    <- Gen.integral Range.constantBounded
+  pure $ Auditor pId
+                 (depName parDep)
+                 (depVersion parDep)
+                 (firstSeen parDep)
+                 (isDirect parDep)
+                 (inUse parDep)
+                 (pack . show $ aStatus parDep)
+
 -- | Generate a direct dependency
-genDirectPackage :: Gen Package
-genDirectPackage = do
-  pId      <- Gen.int32 Range.constantBounded
+genDirectParsedDependency :: Gen ParsedDependency
+genDirectParsedDependency = do
   pName    <- genPackageName
   pVersion <- genPackageVersion
   pTime    <- genUTCTime
   dDep     <- pure True
   sUsed    <- Gen.bool
   aStat    <- genAnalysisStatus
-  pure $ Package
-    pId
-    (Data.Text.pack pName)
-    (Data.Text.pack pVersion)
-    pTime
-    dDep
-    sUsed
-    aStat
+  pure $ ParsedDependency (pack pName) (pack pVersion) pTime dDep sUsed aStat
 
 -- | Generate an indirect dependency
-genIndirectPackage :: Gen Package
-genIndirectPackage = do
-  pId      <- Gen.int32 Range.constantBounded
+genIndirectParsedDependency :: Gen ParsedDependency
+genIndirectParsedDependency = do
   pName    <- genPackageName
   pVersion <- genPackageVersion
   pTime    <- genUTCTime
   dDep     <- pure False
   sUsed    <- Gen.bool
   aStat    <- genAnalysisStatus
-  pure $ Package
-    pId
-    (Data.Text.pack pName)
-    (Data.Text.pack pVersion)
-    pTime
-    dDep
-    sUsed
-    aStat
+  pure $ ParsedDependency (pack pName) (pack pVersion) pTime dDep sUsed aStat
 
 genHash :: Gen Int
 genHash = Gen.int Range.constantBounded
@@ -103,14 +116,7 @@ genPackage = do
   dDep     <- Gen.bool
   sUsed    <- Gen.bool
   aStat    <- genAnalysisStatus
-  pure $ Package
-    pId
-    (Data.Text.pack pName)
-    (Data.Text.pack pVersion)
-    pTime
-    dDep
-    sUsed
-    aStat
+  pure $ Package pId (pack pName) (pack pVersion) pTime dDep sUsed aStat
 
 
 genRemovedPackage :: Gen Package
@@ -121,14 +127,7 @@ genRemovedPackage = do
   pTime    <- genUTCTime
   dDep     <- Gen.bool
   aStat    <- genAnalysisStatus
-  pure $ Package
-    pId
-    (Data.Text.pack pName)
-    (Data.Text.pack pVersion)
-    pTime
-    dDep
-    False
-    aStat
+  pure $ Package pId (pack pName) (pack pVersion) pTime dDep False aStat
 
 genSimpleDepList :: Gen [(String, [String])]
 genSimpleDepList = do
