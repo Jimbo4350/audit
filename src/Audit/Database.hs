@@ -16,12 +16,13 @@ module Audit.Database
   )
 where
 
-import Data.Text (Text)
-import Data.Int (Int32)
-import Data.Time.Clock (UTCTime)
+import           Data.Text                      ( Text )
+import           Data.Int                       ( Int32 )
+import           Data.Time.Clock                ( UTCTime )
 
-import Database.Beam
-import Database.Beam.Sqlite.Connection (Sqlite)
+import           Database.Beam
+import           Database.Beam.Sqlite.Connection
+                                                ( Sqlite )
 
 -- | Auditor Table. Stores the current direct, indirect and
 -- removed dependencies.

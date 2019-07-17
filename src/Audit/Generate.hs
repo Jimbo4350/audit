@@ -9,39 +9,48 @@ module Audit.Generate
   )
 where
 
-import Control.Monad.Trans.Either (runEitherT)
-import Data.Hashable (hash)
-import System.Directory (getDirectoryContents)
-import System.Process (callCommand)
+import           Audit.Conversion               ( auditorEntryToNotUsed
+                                                , updatedAuditorValues
+                                                )
+import           Audit.Operations               ( newParsedDeps
+                                                , checkHash
+                                                , deleteHash
+                                                , insertAuditorDeps
+                                                , insertHash
+                                                , updateAuditorEntryDirect
+                                                , getDirAudEntryByDepName
+                                                , getInDirAudEntryByDepName
+                                                )
+import           Audit.Queries                  ( queryAuditor )
+import           Audit.Sorting                  ( InitialDepVersions(..)
+                                                , parseAllOriginalRepoVers
+                                                , parseAllUpdatedRepoVers
+                                                , initialDepTree
+                                                , filterNewDirDeps
+                                                , filterNewIndirectDeps
+                                                , filterNewVersions
+                                                , filterRemovedIndirectDeps
+                                                , originalDirectDeps
+                                                , filterRemovedDirDeps
+                                                )
+import           Audit.Tree                     ( directDeps
+                                                , indirectDeps
+                                                )
+import           Audit.Types                    ( Command(..)
+                                                , HashStatus(..)
+                                                , OperationError(..)
+                                                , OperationResult(..)
+                                                )
 
-import Audit.Conversion (compareParsedWithAuditor)
-import Audit.Database (AuditorT(..))
-import Audit.Operations
-  ( newParsedDeps
-  , checkHash
-  , deleteHash
-  , insertAuditorDeps
-  , insertHash
-  , updateAuditorEntryDirect
-  )
-import Audit.Queries (queryAuditor)
-import Audit.Sorting
-  ( InitialDepVersions(..)
-  , parseAllOriginalRepoVers
-  , parseAllUpdatedRepoVers
-  , initialDepTree
-  , filterNewDirDeps
-  , filterNewIndirectDeps
-  , filterNewVersions
-  , filterRemovedIndirectDeps
-  , originalDirectDeps
-  , filterRemovedDirDeps
-  )
-import Audit.Tree (directDeps, indirectDeps)
-import Audit.Types
-  (Command(..), HashStatus(..), OperationError(..), OperationResult(..))
-import Data.Time.Clock (getCurrentTime)
-import Data.Text (pack)
+import           Control.Monad.Trans.Either     ( runEitherT )
+import           Data.Either                    ( rights )
+import           Data.Hashable                  ( hash )
+import           Data.Time.Clock                ( getCurrentTime )
+import           System.Directory               ( getDirectoryContents )
+import           System.Process                 ( callCommand )
+
+
+
 -- | Checks if "auditor.db" exists in pwd, if not creates it with the
 -- tables `auditor` (which holds all the dependency data) and `hash`
 -- which holds the hash of the existing .dot file.
@@ -68,8 +77,10 @@ generateInitialDotFiles = do
 
 initializeDB :: String -> IO ()
 initializeDB dbName =
-  callCommand $
-    "sqlite3 " ++ dbName ++ " \
+  callCommand
+    $ "sqlite3 "
+    ++ dbName
+    ++ " \
     \\"CREATE TABLE auditor ( dependency_id INTEGER PRIMARY KEY AUTOINCREMENT\
                            \, package_name VARCHAR NOT NULL\
                            \, package_version VARCHAR NOT NULL\
@@ -91,26 +102,29 @@ initializeDB dbName =
 ------------------------------Handler-----------------------------------
 
 commandHandler :: Command -> IO ()
-commandHandler (Command cmd)
-  | cmd == "audit" = audit
-  | cmd == "load"  = update
-  | otherwise      = print "Invalid command!"
+commandHandler (Command cmd) | cmd == "audit" = audit
+                             | cmd == "load"  = update
+                             | otherwise      = print "Invalid command!"
 
 audit :: IO ()
 audit = do
   hashStat <- checkDB
   case hashStat of
-    HashMatches -> do
+    HashMatches ->
       print
         "Hashes match, dependency tree has not \
                                  \been changed."
     HashDoesNotMatch -> do
       print "Hashes do not match, dependency tree has changed."
       filterNewDirDeps >>= (\x -> print $ "New direct dependencies: " ++ show x)
-      filterNewIndirectDeps >>= (\x -> print $ "New indirect dependencies: " ++ show x)
-      filterNewVersions >>= (\x -> print $ "New dependency versions: " ++ show x)
-      filterRemovedDirDeps >>= (\x -> print $ "Removed direct dependencies: " ++ show x)
-      filterRemovedIndirectDeps >>= (\x -> print $ "Removed indirect dependencies: " ++ show x)
+      filterNewIndirectDeps
+        >>= (\x -> print $ "New indirect dependencies: " ++ show x)
+      filterNewVersions
+        >>= (\x -> print $ "New dependency versions: " ++ show x)
+      filterRemovedDirDeps
+        >>= (\x -> print $ "Removed direct dependencies: " ++ show x)
+      filterRemovedIndirectDeps
+        >>= (\x -> print $ "Removed indirect dependencies: " ++ show x)
       pure ()
     HashNotFound -> do
       print "Hash not found, generating db."
@@ -118,13 +132,11 @@ audit = do
       generateInitialDotFiles
       pVersions <- parseAllOriginalRepoVers
       iDepTree  <- initialDepTree
-      cTime <- getCurrentTime
-      let
-        packages = newParsedDeps
-          (initDeps pVersions)
-          (directDeps iDepTree)
-          (indirectDeps iDepTree)
-          cTime
+      cTime     <- getCurrentTime
+      let packages = newParsedDeps (initDeps pVersions)
+                                   (directDeps iDepTree)
+                                   (indirectDeps iDepTree)
+                                   cTime
       insertAuditorDeps "auditor.db" packages
       (++)
         <$> readFile "repoinfo/currentDepTree.dot"
@@ -142,32 +154,31 @@ _renderOperationError (OnlyDirectDepenciesAllowed pkgs) =
   "The following packages are not direct dependencies: " <> show pkgs
 _renderOperationError (OnlyIndirectDepenciesAllowed pkgs) =
   "The following packages are not indirect dependencies: " <> show pkgs
-_renderOperationError (ConvError err) =
-  "ConversionError: " <> show err
+_renderOperationError (ConvError err) = "ConversionError: " <> show err
 
 update :: IO ()
 update = do
   -- New dependencies (Add to Auditor table)
-  newVersions <- parseAllUpdatedRepoVers
-  newDDeps     <- filterNewDirDeps
-  newInDeps <- filterNewIndirectDeps
-  cTime     <- getCurrentTime
+  newVersions            <- parseAllUpdatedRepoVers
+  newDDeps               <- filterNewDirDeps
+  newInDeps              <- filterNewIndirectDeps
+  cTime                  <- getCurrentTime
 
 
-  allAuditorEntries <- queryAuditor "auditor.db"
+  allAuditorEntries      <- queryAuditor "auditor.db"
 
   -- Removed dependencies (change stillUsed flag)
   remDirDepsPackageNames <- filterRemovedDirDeps
 
   -- Removed indirect dependencies
-  remIndirDeps <- filterRemovedIndirectDeps
+  remIndirDeps           <- filterRemovedIndirectDeps
 
   -- New dependencies
   let newDeps = newParsedDeps newVersions newDDeps newInDeps cTime
 
   case (newDeps, remDirDepsPackageNames, remIndirDeps) of
-    ([],[],[]) -> print "No dependency updates detected."
-    _  -> do
+    ([], [], []) -> print "No dependency updates detected."
+    _            -> do
       -- OVERALL FLOW. QUERY AUDITOR TABLE, USE LIST COMPREHENSION & PARSE RESULTS TO FILTER
       -- THE ENTRY/ENTRIES YOU ARE LOOKING FOR.
 
@@ -176,40 +187,52 @@ update = do
       -- or vice versa
 
       -- Check to see if the new parsed deps results are already in auditor
-      let checkForNew = map compareParsedWithAuditor newDeps
-      let newDepsAlreadyInAuditor = [ aEntry {auditorStillUsed = True}
-                                    | aEntry <- allAuditorEntries
-                                    , f <- checkForNew
-                                    , f aEntry == True
-                                    ]
-      let dirDepsToBeRemovedAuditor = [ aEntry { auditorStillUsed = False}
-                                      | aEntry <- allAuditorEntries
-                                      , auditorPackageName aEntry `elem` map pack remDirDepsPackageNames
-                                      , auditorDirectDep aEntry == True
-                                      ]
-      let indirDepsToBeRemovedAuditor = [ aEntry {auditorStillUsed = False}
-                                        | aEntry <- allAuditorEntries
-                                        , auditorPackageName aEntry `elem` map pack remIndirDeps
-                                        , auditorDirectDep aEntry == False
-                                        ]
-      case (newDepsAlreadyInAuditor,dirDepsToBeRemovedAuditor, indirDepsToBeRemovedAuditor) of
-        -- Insert actual new dependencies
-        ([],[],[]) -> do
-          print $ "Inserting new dependencies:" ++ show newDDeps
-          insertAuditorDeps "auditor.db" newDeps
-          cleanUpAndUpdateHash
-        -- Update existing dependencies/ Add new dependencies (see above)
-        _ -> do
-            -- If this is a new dep already in the auditor, it means we have
-            -- re-added a direct dependency and need to adjust the stillUsed bool
+      let newDepsAlreadyInAuditor =
+            updatedAuditorValues allAuditorEntries newDeps
 
-            mapM_ (runEitherT . updateAuditorEntryDirect "auditor.db") newDepsAlreadyInAuditor
+      -- Checks all auditor enteries, checks that the package name exists in the remDirDepsPAcakageNames
+      -- list then also checks that the value from the auditor is inface a direct dependency. You need
+      -- to run getDirAudEntryByDepName on every value of remDirDepsPackageNames and then propagate an error
+      -- if the package does not exist in the auditor table. This needs to be done for indirDeps aswell
+      -- so your function should be agnostic.....
+      eitherDirDepsToBeRemovedAuditor <- mapM
+        (runEitherT . getDirAudEntryByDepName "auditor.db")
+        remDirDepsPackageNames
+      let dirDepsToBeRemovedAuditor =
+            map auditorEntryToNotUsed $ rights eitherDirDepsToBeRemovedAuditor
+
+      eitherIndirDepsToBeRemovedAuditor <- mapM
+        (runEitherT . getInDirAudEntryByDepName "auditor.db")
+        remIndirDeps
+      let indirDepsToBeRemovedAuditor =
+            map auditorEntryToNotUsed $ rights eitherIndirDepsToBeRemovedAuditor
+
+      case
+          ( newDepsAlreadyInAuditor
+          , dirDepsToBeRemovedAuditor
+          , indirDepsToBeRemovedAuditor
+          )
+        of
+        -- Insert actual new dependencies
+          ([], [], []) -> do
+            print $ "Inserting new dependencies:" ++ show newDDeps
+            insertAuditorDeps "auditor.db" newDeps
+            cleanUpAndUpdateHash
+          -- Update existing dependencies/ Add new dependencies (see above)
+          _ -> do
+              -- If this is a new dep already in the auditor, it means we have
+              -- re-added a direct dependency and need to adjust the stillUsed bool
+
+            mapM_ (runEitherT . updateAuditorEntryDirect "auditor.db")
+                  newDepsAlreadyInAuditor
 
             -- Update removed dependencies (removedDirs = change DirectDep flag to false)
-            mapM_ (runEitherT . updateAuditorEntryDirect "auditor.db") dirDepsToBeRemovedAuditor
+            mapM_ (runEitherT . updateAuditorEntryDirect "auditor.db")
+                  dirDepsToBeRemovedAuditor
 
             -- Update removed indirect dependencies
-            mapM_ (runEitherT . updateAuditorEntryDirect "auditor.db") indirDepsToBeRemovedAuditor
+            mapM_ (runEitherT . updateAuditorEntryDirect "auditor.db")
+                  indirDepsToBeRemovedAuditor
 
             print
               "Overwriting original repository dependency \

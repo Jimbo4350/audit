@@ -8,13 +8,24 @@ module Audit.Queries
   )
 where
 
-import Audit.Database
-  (Auditor, AuditorDb(..), AuditorT(..), Hash, auditorDb)
-import Data.Text (Text)
-import Database.Beam
-  (all_, runSelectReturningList, runSelectReturningOne, select)
-import Database.Beam.Sqlite.Connection (runBeamSqlite)
-import Database.SQLite.Simple (close, open)
+import           Audit.Database                 ( Auditor
+                                                , AuditorDb(..)
+                                                , AuditorT(..)
+                                                , Hash
+                                                , auditorDb
+                                                )
+
+import           Data.Text                      ( Text )
+import           Database.Beam                  ( all_
+                                                , runSelectReturningList
+                                                , runSelectReturningOne
+                                                , select
+                                                )
+import           Database.Beam.Sqlite.Connection
+                                                ( runBeamSqlite )
+import           Database.SQLite.Simple         ( close
+                                                , open
+                                                )
 
 -- | Returns all entries in the Auditor table.
 queryAuditor :: String -> IO [Auditor]

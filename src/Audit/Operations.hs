@@ -8,32 +8,46 @@ module Audit.Operations
   , insertAuditorDeps
   , insertHash
   , updateAuditorEntryDirect
+  , getDirAudEntryByDepName
+  , getInDirAudEntryByDepName
   )
 where
 
-import Audit.AuditorOperations
-  (clearAuditorTable, insertAuditorDeps)
-import Audit.Database
-  (Auditor, AuditorDb(..), HashT(..), auditorDb)
-import Audit.Queries (queryHash)
-import Audit.Types
-  ( DirectDependency
-  , HashStatus(..)
-  , IndirectDependency
-  , OperationError(..)
-  , OperationResult(..)
-  , DependencyName
-  , ParsedDependency (..)
-  , Version
-  )
-import Control.Monad.Trans.Either (EitherT)
-import Data.Maybe (fromMaybe)
-import Data.Text (pack)
-import Data.Time.Clock (UTCTime)
-import Database.Beam
+import           Audit.AuditorOperations        ( clearAuditorTable
+                                                , insertAuditorDeps
+                                                )
+import           Audit.Database                 ( Auditor
+                                                , AuditorT(..)
+                                                , AuditorDb(..)
+                                                , HashT(..)
+                                                , auditorDb
+                                                )
+import           Audit.Queries                  ( queryHash )
+import           Audit.Types                    ( DirectDependency
+                                                , HashStatus(..)
+                                                , IndirectDependency
+                                                , OperationError(..)
+                                                , OperationResult(..)
+                                                , DependencyName
+                                                , ParsedDependency(..)
+                                                , Version
+                                                )
 
-import Database.Beam.Sqlite.Connection (runBeamSqlite)
-import Database.SQLite.Simple (close, open)
+import           Control.Monad.Trans.Either     ( EitherT
+                                                , left
+                                                )
+import           Data.Maybe                     ( fromMaybe )
+import           Data.Text                      ( pack )
+import           Data.Time.Clock                ( UTCTime )
+import           Database.Beam
+
+import           Database.Beam.Sqlite.Connection
+                                                ( runBeamSqlite
+                                                , Sqlite
+                                                )
+import           Database.SQLite.Simple         ( close
+                                                , open
+                                                )
 
 --------------------------------------------------------------------------------
 -- Conversion Functions
@@ -54,20 +68,76 @@ newParsedDeps pVersions dDeps indirDeps currTime = do
 
   directPackages ++ indirectPackages
  where
-  lookupVersion x =
-    pack $ fromMaybe "No version Found" (lookup x pVersions)
-  directPkg time x = ParsedDependency (pack x) (lookupVersion x) time True True []
-  indirectPkg time x = ParsedDependency (pack x) (lookupVersion x) time False True []
+  lookupVersion x = pack $ fromMaybe "No version Found" (lookup x pVersions)
+  directPkg time x =
+    ParsedDependency (pack x) (lookupVersion x) time True True []
+  indirectPkg time x =
+    ParsedDependency (pack x) (lookupVersion x) time False True []
 
 updateAuditorEntryDirect
   :: String -> Auditor -> EitherT OperationError IO OperationResult
 updateAuditorEntryDirect dbName updatedPackage = do
-  conn    <- liftIO $ open dbName
+  conn <- liftIO $ open dbName
   -- Updates corresponding package in auditor table.
-  liftIO $ runBeamSqlite conn $ runUpdate $ save (auditor auditorDb) updatedPackage
+  liftIO $ runBeamSqlite conn $ runUpdate $ save (auditor auditorDb)
+                                                 updatedPackage
 
   liftIO $ close conn
   pure UpdatedAuditorTableStillUsed
+
+filterDirDepQuery
+  :: DirectDependency -> Q Sqlite AuditorDb s (AuditorT (QExpr Sqlite s))
+filterDirDepQuery dirDep =
+  filter_
+      (\dependency ->
+        auditorPackageName dependency
+          ==. (val_ $ pack dirDep)
+          &&. auditorDirectDep dependency
+          ==. (val_ True)
+      )
+    $ all_ (auditor auditorDb)
+
+getDirAudEntryByDepName
+  :: String -> DirectDependency -> EitherT OperationError IO Auditor
+getDirAudEntryByDepName dbName dirDep = do
+  conn  <- liftIO $ open dbName
+  entry <-
+    liftIO
+    . runBeamSqlite conn
+    . runSelectReturningOne
+    . select
+    $ filterDirDepQuery dirDep
+  liftIO $ close conn
+  case entry of
+    Just aEntry -> pure aEntry
+    Nothing     -> left $ NotInAuditorTable dirDep
+
+filterInDirDepQuery
+  :: IndirectDependency -> Q Sqlite AuditorDb s (AuditorT (QExpr Sqlite s))
+filterInDirDepQuery dirDep =
+  filter_
+      (\dependency ->
+        auditorPackageName dependency
+          ==. (val_ $ pack dirDep)
+          &&. auditorDirectDep dependency
+          ==. (val_ False)
+      )
+    $ all_ (auditor auditorDb)
+
+getInDirAudEntryByDepName
+  :: String -> DirectDependency -> EitherT OperationError IO Auditor
+getInDirAudEntryByDepName dbName dirDep = do
+  conn  <- liftIO $ open dbName
+  entry <-
+    liftIO
+    . runBeamSqlite conn
+    . runSelectReturningOne
+    . select
+    $ filterInDirDepQuery dirDep
+  liftIO $ close conn
+  case entry of
+    Just aEntry -> pure aEntry
+    Nothing     -> left $ NotInAuditorTable dirDep
 
 --------------------------------------------------------------------------------
 -- Hash Table Operations
