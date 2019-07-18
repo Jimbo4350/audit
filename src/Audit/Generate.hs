@@ -10,18 +10,19 @@ module Audit.Generate
 where
 
 import           Audit.Conversion               ( auditorEntryToNotUsed
+                                                , newParsedDeps
                                                 , updatedAuditorValues
                                                 )
-import           Audit.Operations               ( newParsedDeps
-                                                , checkHash
+import           Audit.Operations               ( checkHash
                                                 , deleteHash
                                                 , insertAuditorDeps
                                                 , insertHash
                                                 , updateAuditorEntryDirect
+                                                )
+import           Audit.Queries                  ( queryAuditor
                                                 , getDirAudEntryByDepName
                                                 , getInDirAudEntryByDepName
                                                 )
-import           Audit.Queries                  ( queryAuditor )
 import           Audit.Sorting                  ( InitialDepVersions(..)
                                                 , parseAllOriginalRepoVers
                                                 , parseAllUpdatedRepoVers
