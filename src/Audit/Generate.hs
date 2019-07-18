@@ -3,6 +3,7 @@
 module Audit.Generate
   ( commandHandler
   , audit
+  , cleanUpAndUpdateHash
   , originalDirectDeps
   , update
   , initializeDB
@@ -18,6 +19,7 @@ import           Audit.Operations               ( checkHash
                                                 , insertAuditorDeps
                                                 , insertHash
                                                 , updateAuditorEntryDirect
+                                                , updateAuditorVersionChange
                                                 )
 import           Audit.Queries                  ( queryAuditor
                                                 , getDirAudEntryByDepName
@@ -29,7 +31,7 @@ import           Audit.Sorting                  ( InitialDepVersions(..)
                                                 , initialDepTree
                                                 , filterNewDirDeps
                                                 , filterNewIndirectDeps
-                                                , filterNewVersions
+                                                , filterVersionChanges
                                                 , filterRemovedIndirectDeps
                                                 , originalDirectDeps
                                                 , filterRemovedDirDeps
@@ -41,6 +43,7 @@ import           Audit.Types                    ( Command(..)
                                                 , HashStatus(..)
                                                 , OperationError(..)
                                                 , OperationResult(..)
+                                                , UpdatedDepVersions(..)
                                                 )
 
 import           Control.Monad.Trans.Either     ( runEitherT )
@@ -120,7 +123,7 @@ audit = do
       filterNewDirDeps >>= (\x -> print $ "New direct dependencies: " ++ show x)
       filterNewIndirectDeps
         >>= (\x -> print $ "New indirect dependencies: " ++ show x)
-      filterNewVersions
+      filterVersionChanges
         >>= (\x -> print $ "New dependency versions: " ++ show x)
       filterRemovedDirDeps
         >>= (\x -> print $ "Removed direct dependencies: " ++ show x)
@@ -175,10 +178,14 @@ update = do
   remIndirDeps           <- filterRemovedIndirectDeps
 
   -- New dependencies
-  let newDeps = newParsedDeps newVersions newDDeps newInDeps cTime
+  let newDeps =
+        newParsedDeps (updatedDeps newVersions) newDDeps newInDeps cTime
 
-  case (newDeps, remDirDepsPackageNames, remIndirDeps) of
-    ([], [], []) -> print "No dependency updates detected."
+  -- Version Changes
+  vChanges <- filterVersionChanges
+
+  case (newDeps, remDirDepsPackageNames, remIndirDeps, vChanges) of
+    ([], [], [], []) -> print "No dependency updates detected."
     _            -> do
       -- OVERALL FLOW. QUERY AUDITOR TABLE, USE LIST COMPREHENSION & PARSE RESULTS TO FILTER
       -- THE ENTRY/ENTRIES YOU ARE LOOKING FOR.
@@ -212,10 +219,11 @@ update = do
           ( newDepsAlreadyInAuditor
           , dirDepsToBeRemovedAuditor
           , indirDepsToBeRemovedAuditor
+          , vChanges
           )
         of
         -- Insert actual new dependencies
-          ([], [], []) -> do
+          ([], [], [], []) -> do
             print $ "Inserting new dependencies:" ++ show newDDeps
             insertAuditorDeps "auditor.db" newDeps
             cleanUpAndUpdateHash
@@ -235,6 +243,9 @@ update = do
             mapM_ (runEitherT . updateAuditorEntryDirect "auditor.db")
                   indirDepsToBeRemovedAuditor
 
+            -- Version change updates
+            mapM_ (runEitherT . updateAuditorVersionChange "auditor.db") vChanges
+
             print
               "Overwriting original repository dependency \
                               \tree & clearing Diff table"
@@ -242,7 +253,7 @@ update = do
 
 cleanUpAndUpdateHash :: IO ()
 cleanUpAndUpdateHash = do
-  callCommand "stack dot --external > repoinfo/currentDepTree.dot"
+  generateInitialDotFiles
   print "Deleting old hash."
   deleteHash "auditor.db"
   -- `contents` will become the new hash

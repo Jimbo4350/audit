@@ -22,13 +22,12 @@ import           Audit.Operations               ( clearAuditorTable
                                                 , insertAuditorDeps
                                                 , insertHash
                                                 , updateAuditorEntryDirect
+                                                , updateAuditorVersionChange
                                                 )
 
 import           Audit.Queries                  ( getDirAudEntryByDepName
                                                 , getInDirAudEntryByDepName
                                                 , queryAuditor
-                                                , queryAuditorDepVersions
-                                                , queryAuditorRemovedDeps
                                                 , queryHash
                                                 )
 import           Audit.Tree                     ( buildDepTree
@@ -39,7 +38,8 @@ import           Audit.Types                    ( Package(..)
                                                 , QPResult(..)
                                                 , ParsedDependency(..)
                                                 )
-import           Test.Audit.Gen                 ( genDirectParsedDependency
+import           Test.Audit.Gen                 ( genDependencyVersion
+                                                , genDirectParsedDependency
                                                 , genHash
                                                 , genIndirectParsedDependency
                                                 , genNameVersions
@@ -57,6 +57,7 @@ import           Data.Bifunctor                 ( bimap )
 import           Data.Either                    ( rights )
 import           Data.List                      ( all
                                                 , sort
+                                                , (\\)
                                                 )
 import           Data.Text                      ( pack
                                                 , unpack
@@ -314,6 +315,45 @@ prop_updateRemovedIndirectDependency = withTests 100 . property $ do
       liftIO $ clearAuditorTable "temp.db"
       updatedAuditorValues === updatedDeps
 
+
+
+-- | Check if the version already exists
+-- Yes -> Return all packages with that name
+--        change stillUsed to True for packages with that version
+--        and stillUsed to false for the rest
+-- False -> Return all packages with that name, change stillUsed
+--          to false and readd all the returned packages with a
+--          dependency verison update and a currentTime update.
+prop_updateChangedVersions :: Property
+prop_updateChangedVersions = withTests 100 . property $ do
+  -- Generate a db with dir and indir
+  inDirParsedDep <- forAll genIndirectParsedDependency
+  let dirParsedDep = inDirParsedDep {isDirect = True}
+  liftIO $ insertAuditorDeps "temp.db" [inDirParsedDep, dirParsedDep]
+  initialDeps <- liftIO $ queryAuditor "temp.db"
+
+  -- Generate a version change
+  newVer <- forAll genDependencyVersion
+
+  -- update db with the changes
+  liftIO . runEitherT $ updateAuditorVersionChange "temp.db" (unpack $ depName dirParsedDep,newVer)
+
+  -- Query the auditor for all instances of the change
+  -- and compare that with the updated changes generated.
+  updatedDeps <- liftIO $ queryAuditor "temp.db"
+  liftIO $ clearAuditorTable "temp.db"
+
+  let dbUpatedDeps = filter (\audDep -> auditorPackageVersion audDep == pack newVer) updatedDeps
+  let dbInitialDeps = updatedDeps \\ dbUpatedDeps
+
+  -- Check the updated deps have indeed been updated
+  mapM_ (\dep -> auditorPackageVersion dep === pack newVer) dbUpatedDeps
+
+  -- There should be two updated deps
+  2 === length dbUpatedDeps
+
+  -- The initial deps should only have changed stillUsed flags
+  map (\dep -> dep {auditorStillUsed = False}) initialDeps === dbInitialDeps
 
 
 tests :: IO Bool

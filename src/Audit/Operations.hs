@@ -8,6 +8,7 @@ module Audit.Operations
   , insertAuditorDeps
   , insertHash
   , updateAuditorEntryDirect
+  , updateAuditorVersionChange
   )
 where
 
@@ -17,24 +18,36 @@ import           Audit.Database                 ( Auditor
                                                 , HashT(..)
                                                 , auditorDb
                                                 )
-import           Audit.Conversion               ( parsedDepToAudQExpr )
-import           Audit.Queries                  ( queryAuditorDepNames
+import           Audit.Conversion               ( auditorEntryToParsedDep
+                                                , parsedDepToAudQExpr
+                                                )
+import           Audit.Queries                  ( getAllVersionsOfDep
+                                                , queryAuditorDepNames
+                                                , queryAuditorSpecificVersion
                                                 , queryHash
                                                 )
-import           Audit.Types                    ( HashStatus(..)
+import           Audit.Types                    ( DependencyName
+                                                , HashStatus(..)
                                                 , OperationError(..)
                                                 , OperationResult(..)
-                                                , ParsedDependency
+                                                , ParsedDependency(..)
+                                                , Version
                                                 )
 
-import           Control.Monad.Trans.Either     ( EitherT )
+import           Control.Monad.Trans.Either     ( EitherT
+                                                , firstEitherT
+                                                , hoistEither
+                                                , right
+                                                )
+import           Data.Time.Clock                ( getCurrentTime )
+import           Data.Text                      ( pack )
 import           Database.Beam
-
 import           Database.Beam.Sqlite.Connection
                                                 ( runBeamSqlite )
 import           Database.SQLite.Simple         ( close
                                                 , open
                                                 )
+
 
 
 --------------------------------------------------------------------------------
@@ -127,3 +140,59 @@ updateAuditorEntryDirect dbName updatedPackage = do
 
   liftIO $ close conn
   pure UpdatedAuditorTableStillUsed
+
+updateAuditorVersionChange
+  :: String
+  -> (DependencyName, Version)
+  -> EitherT OperationError IO OperationResult
+updateAuditorVersionChange dbName changedVersion = do
+  -- Returns all dependencies (dir and indir) with this version.
+  result <- queryAuditorSpecificVersion dbName changedVersion
+  case result of
+    -- | If the version exists in the database, we need
+    -- to return all packages with the same name, change
+    -- stillUsed to True for packages matching the updated version
+    -- and false for the rest.
+
+    VersionExistsInDb dirAndIndirEntries -> do
+      -- Update stillUsed to True for entries of 'changedVersion'
+      let updatedStillUsed = map
+            (\audDep -> audDep { auditorStillUsed = True })
+            dirAndIndirEntries
+      mapM_ (updateAuditorEntryDirect dbName) updatedStillUsed
+
+      -- Update stillUsed to False for all other versions
+      allVersions <- getAllVersionsOfDep dbName $ fst changedVersion
+      let oldVersions = map (\dep -> dep {auditorStillUsed = False}) $ filter (\dep -> auditorPackageVersion dep /= (pack $ snd changedVersion)) allVersions
+      mapM_ (updateAuditorEntryDirect dbName) oldVersions
+      pure SuccessfullyUpdatedVersion
+
+    VersionDoesNotExistInDb -> do
+      -- Update stillUsed to False for entries of all other existing versions
+      deps <- getAllVersionsOfDep dbName $ fst changedVersion
+      mapM_
+        ( updateAuditorEntryDirect dbName
+        . (\audDep -> audDep { auditorStillUsed = False })
+        )
+        deps
+
+      -- Convert an existing Auditor entry to a ParsedDepenency
+      -- so we can add new entries of the new version, add a new
+      -- current time, and force a new unique package_id.
+
+      pDeps <- firstEitherT ReadError . hoistEither $ mapM
+        auditorEntryToParsedDep
+        deps
+      cTime <- liftIO getCurrentTime
+      let newAuditorEntryVersions = map
+            (\dep -> dep { inUse      = True
+                         , depVersion = pack $ snd changedVersion
+                         , firstSeen  = cTime
+                         }
+            )
+            pDeps
+      liftIO $ insertAuditorDeps dbName newAuditorEntryVersions
+      right SuccessfullyUpdatedVersion
+    _ -> error "updateAuditorVersionChange: Should not happen"
+
+
