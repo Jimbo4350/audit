@@ -25,7 +25,6 @@ source-repository head
 
 library
   exposed-modules:
-      Audit.AuditorOperations
       Audit.Conversion
       Audit.Database
       Audit.Generate

@@ -8,6 +8,7 @@ import           Audit.Generate                 ( initializeDB )
 import           Audit.Conversion               ( packageToParsedDep
                                                 , auditorEntryToParsedDep
                                                 , compareParsedWithAuditor
+                                                , newParsedDeps
                                                 , returnUpdatedAuditorEntry
                                                 , updatedAuditorValues
                                                 , auditorEntryToNotUsed
@@ -16,17 +17,16 @@ import           Audit.Database                 ( Auditor
                                                 , AuditorT(..)
                                                 , HashT(..)
                                                 )
-import           Audit.Operations               ( newParsedDeps
-                                                , clearAuditorTable
+import           Audit.Operations               ( clearAuditorTable
                                                 , deleteHash
-                                                , getDirAudEntryByDepName
                                                 , insertAuditorDeps
                                                 , insertHash
                                                 , updateAuditorEntryDirect
-                                                , getInDirAudEntryByDepName
                                                 )
 
-import           Audit.Queries                  ( queryAuditor
+import           Audit.Queries                  ( getDirAudEntryByDepName
+                                                , getInDirAudEntryByDepName
+                                                , queryAuditor
                                                 , queryAuditorDepVersions
                                                 , queryAuditorRemovedDeps
                                                 , queryHash
@@ -203,22 +203,19 @@ prop_insertAuditorDeps = withTests 100 . property $ do
 -- the exisisting identical indirect dependency entry.
 
 prop_insertNewDirectDependency :: Property
-prop_insertNewDirectDependency =
-      withTests 100
-    . property
-    $ do
-        indirParDep <- forAll genIndirectParsedDependency
-        liftIO $ insertAuditorDeps "temp.db" [indirParDep]
+prop_insertNewDirectDependency = withTests 100 . property $ do
+  indirParDep <- forAll genIndirectParsedDependency
+  liftIO $ insertAuditorDeps "temp.db" [indirParDep]
 
-        let identicalDirDep = indirParDep { isDirect = True }
-        liftIO $ insertAuditorDeps "temp.db" [identicalDirDep]
+  let identicalDirDep = indirParDep { isDirect = True }
+  liftIO $ insertAuditorDeps "temp.db" [identicalDirDep]
 
-        deps <- liftIO $ queryAuditor "temp.db"
-        liftIO $ clearAuditorTable "temp.db"
-        let parsedDepsFromAud = map auditorEntryToParsedDep deps
-        mapM evalEither parsedDepsFromAud
+  deps <- liftIO $ queryAuditor "temp.db"
+  liftIO $ clearAuditorTable "temp.db"
+  let parsedDepsFromAud = map auditorEntryToParsedDep deps
+  mapM evalEither parsedDepsFromAud
 
-        rights parsedDepsFromAud === [indirParDep, identicalDirDep]
+  rights parsedDepsFromAud === [indirParDep, identicalDirDep]
 
 -- | Newly parsed dependencies that already exist in the `Auditor` table
 -- Check that the relevant enteries are correctly updated in the `Auditor` table.

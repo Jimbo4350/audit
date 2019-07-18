@@ -20,9 +20,8 @@ where
 import           Audit.Database                 ( Auditor
                                                 , AuditorT(..)
                                                 )
-import           Audit.Operations               ( newParsedDeps
-                                                , insertAuditorDeps
-                                                )
+import           Audit.Conversion               ( newParsedDeps )
+import           Audit.Operations               ( insertAuditorDeps )
 import           Audit.Sorting                  ( groupParseResults )
 import           Audit.Tree                     ( buildDepTree
                                                 , directDeps
