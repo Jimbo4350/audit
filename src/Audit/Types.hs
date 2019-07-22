@@ -8,6 +8,8 @@ module Audit.Types
   , NewDependency(..)
   , OperationError(..)
   , OperationResult(..)
+  , InitialDepVersions(..)
+  , UpdatedDepVersions(..)
   , Package(..)
   , DependencyName
   , ParsedDependency(..)
@@ -15,6 +17,8 @@ module Audit.Types
   , Version
   )
 where
+
+import           Audit.Database                    ( Auditor )
 
 import           Data.Text                      ( Text )
 import           Data.Time.Clock                ( UTCTime(..) )
@@ -56,6 +60,8 @@ data OperationError =
  | OnlyIndirectDepenciesAllowed [ParsedDependency]
  | ConvError ConversionError
  | NotInAuditorTable String
+ | ReadError String
+
  deriving Show
 
 data OperationResult =
@@ -95,10 +101,18 @@ data OperationResult =
   | UpdatedAuditorTableStillUsed
     -- ^ Updated the 'stillUsed' flag for specific enteries in the
     -- auditor table
+  | SuccessfullyUpdatedVersion
+    -- ^ Updated the version of a particular dependency.
+  | VersionExistsInDb [Auditor]
+  | VersionDoesNotExistInDb
   deriving Show
 
 
-newtype NewDependency = NewDependency { getNewDependency :: ParsedDependency }
+newtype NewDependency =
+  NewDependency { getNewDependency :: ParsedDependency }
+
+newtype InitialDepVersions =
+  InitialDepVersions { initDeps :: [(DependencyName, Version)] } deriving Show
 
 data ParsedDependency = ParsedDependency
     { depName    :: Text
@@ -134,5 +148,8 @@ data QPResult a =
   | QPParseIsEmpty
     -- ^ No changes detected between '.dot' files.
   deriving (Eq, Show)
+
+newtype UpdatedDepVersions =
+  UpdatedDepVersions { updatedDeps :: [(DependencyName, Version)] } deriving Show
 
 type Version = String

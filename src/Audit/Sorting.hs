@@ -6,7 +6,7 @@ module Audit.Sorting
   , groupParseResults
   , initialDepTree
   , filterNewIndirectDeps
-  , filterNewVersions
+  , filterVersionChanges
   , filterNewDirDeps
   , filterRemovedIndirectDeps
   , originalDirectDeps
@@ -26,6 +26,8 @@ import           Audit.Tree                     ( buildDepTree )
 import           Audit.Types                    ( DirectDependency
                                                 , IndirectDependency
                                                 , DependencyName
+                                                , InitialDepVersions(..)
+                                                , UpdatedDepVersions(..)
                                                 , Version
                                                 )
 
@@ -33,6 +35,10 @@ import           Data.List                      ( groupBy
                                                 , nub
                                                 , (\\)
                                                 , intersect
+                                                )
+import           Data.Set                       ( difference
+                                                , fromList
+                                                , toList
                                                 )
 import           Data.Tree                      ( Tree )
 import           Text.Parsec                    ( parse )
@@ -92,9 +98,6 @@ filterAllUpdatedRepoIndirDeps = do
   let dirAndIndirDeps        = allUpdatedRepoDepsList `intersect` updatedDirDeps
   return $ (allUpdatedRepoDepsList \\ updatedDirDeps) ++ dirAndIndirDeps
 
-
-newtype InitialDepVersions = InitialDepVersions { initDeps :: [(DependencyName, Version)] }
-
 -- | Returns all the packages in the repo and their versions. Again
 -- the repo itself is considered a package and is included. NB: The version
 -- in the tuple is the version of the `PackageName` within that tuple.
@@ -105,12 +108,12 @@ parseAllOriginalRepoVers = do
     Left  parserError -> error $ show parserError
     Right vers        -> return $ InitialDepVersions vers
 
-parseAllUpdatedRepoVers :: IO [(DependencyName, Version)]
+parseAllUpdatedRepoVers :: IO UpdatedDepVersions
 parseAllUpdatedRepoVers = do
   pVers <- parse versions "" <$> readFile "repoinfo/updatedDepTreeVersions.txt"
   case pVers of
     Left  parserError -> error $ show parserError
-    Right vers        -> return vers
+    Right vers        -> return $ UpdatedDepVersions vers
 
 -- | Returns all new indirect dependencies. NB: The hierarchy is lost and
 -- packages in this list could be dependencies of each other.
@@ -134,13 +137,14 @@ filterNewDirDeps = do
   return . map snd $ filter (\x -> rName == fst x) newDeps \\ oldDeps
 
 -- | Checks for new versions added to the cabal file.
-filterNewVersions :: IO [(String, String)]
-filterNewVersions = do
-  rName    <- parseRepoName
-  oldVers' <- parseAllOriginalRepoVers
+filterVersionChanges :: IO [(DependencyName, Version)]
+filterVersionChanges = do
+  oldVers <- parseAllOriginalRepoVers
   -- TODO: Thread `Text` through the repo
-  newVers  <- parseAllUpdatedRepoVers
-  return $ filter (\x -> rName == fst x) newVers \\ (initDeps oldVers')
+  newVers <- parseAllUpdatedRepoVers
+  let updatedVersSet = fromList $ updatedDeps newVers
+  let initialVersSet = fromList $ (initDeps oldVers)
+  return . toList $ updatedVersSet `difference` initialVersSet
 
 -- | Checks for direct dependencies that were removed.
 filterRemovedDirDeps :: IO [DirectDependency]

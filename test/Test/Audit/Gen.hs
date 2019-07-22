@@ -9,7 +9,7 @@ module Test.Audit.Gen
   , genNameVersions
   , genPackage
   , genPackageName
-  , genPackageVersion
+  , genDependencyVersion
   , genRemovedPackage
   , genSimpleDepList
   , genUTCTime
@@ -70,7 +70,7 @@ genAuditor = do
 genDirectParsedDependency :: Gen ParsedDependency
 genDirectParsedDependency = do
   pName    <- genPackageName
-  pVersion <- genPackageVersion
+  pVersion <- genDependencyVersion
   pTime    <- genUTCTime
   dDep     <- pure True
   sUsed    <- Gen.bool
@@ -81,7 +81,7 @@ genDirectParsedDependency = do
 genIndirectParsedDependency :: Gen ParsedDependency
 genIndirectParsedDependency = do
   pName    <- genPackageName
-  pVersion <- genPackageVersion
+  pVersion <- genDependencyVersion
   pTime    <- genUTCTime
   dDep     <- pure False
   sUsed    <- Gen.bool
@@ -93,7 +93,7 @@ genHash = Gen.int Range.constantBounded
 
 genNameVersions :: [String] -> Gen [(String, String)]
 genNameVersions pNames = do
-  pVersions <- Gen.list (Range.constant 3 20) genPackageVersion
+  pVersions <- Gen.list (Range.constant 3 20) genDependencyVersion
   pure $ zip pNames pVersions
 
 genPackageName :: Gen String
@@ -101,8 +101,8 @@ genPackageName = Gen.choice
   [concat <$> sequence [rString, Gen.constant "-", rString], rString]
   where rString = Gen.string (Range.constant 4 8) Gen.lower
 
-genPackageVersion :: Gen String
-genPackageVersion = concat <$> sequence
+genDependencyVersion :: Gen String
+genDependencyVersion = concat <$> sequence
   [rInt, Gen.constant ".", rInt, Gen.constant ".", rInt, Gen.constant ".", rInt]
   where rInt = Gen.string (Range.constant 1 2) Gen.digit
 
@@ -110,7 +110,7 @@ genPackage :: Gen Package
 genPackage = do
   pId      <- Gen.int32 Range.constantBounded
   pName    <- genPackageName
-  pVersion <- genPackageVersion
+  pVersion <- genDependencyVersion
   pTime    <- genUTCTime
   dDep     <- Gen.bool
   sUsed    <- Gen.bool
@@ -122,7 +122,7 @@ genRemovedPackage :: Gen Package
 genRemovedPackage = do
   pId      <- Gen.int32 Range.constantBounded
   pName    <- genPackageName
-  pVersion <- genPackageVersion
+  pVersion <- genDependencyVersion
   pTime    <- genUTCTime
   dDep     <- Gen.bool
   aStat    <- genAnalysisStatus

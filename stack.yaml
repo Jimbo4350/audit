@@ -8,3 +8,4 @@ extra-deps:
   - beam-migrate-0.4.0.1
   - hedgehog-1.0
   - transformers-either-0.1.1
+
