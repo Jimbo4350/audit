@@ -112,7 +112,7 @@ returnUpdatedAuditorEntry
   :: ParsedDependency -> Auditor -> Either ConversionError Auditor
 returnUpdatedAuditorEntry pDep aud = if compareParsedWithAuditor pDep aud
   then Right $ parsedDepToAud (auditorDependencyId aud) pDep
-  else Left NewlyParsedDepDoesNotExistInDb
+  else Left $ NewlyParsedDepDoesNotExistInDb pDep
 
 -- | This only works for new dependencies. Any dependency that is removed
 -- must rely on the Auditor table for its relevant information

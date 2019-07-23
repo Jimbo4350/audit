@@ -51,8 +51,8 @@ import           Text.Parsec                    ( parse )
 -- then performing list operations on the two results to get
 -- new dependencies, versions etc.
 
-allInitialDepsGrouped :: IO [(DependencyName, [DirectDependency])]
-allInitialDepsGrouped = groupParseResults <$> parseAllOriginalRepoDeps
+allInitialDepsGrouped :: FilePath -> IO [(DependencyName, [DirectDependency])]
+allInitialDepsGrouped fp = groupParseResults <$> parseAllOriginalRepoDeps fp
 
 allUpdatedDepsGrouped :: IO [(DependencyName, [DirectDependency])]
 allUpdatedDepsGrouped = groupParseResults <$> parseAllUpdatedRepoDeps
@@ -60,9 +60,9 @@ allUpdatedDepsGrouped = groupParseResults <$> parseAllUpdatedRepoDeps
 -- | Returns all the packages in the repo and their direct depdendencies.
 -- The repo itself is considered a package. NB: The direct dependency in
 -- the tuple is the direct dependency of the `PackageName` within that tuple.
-parseAllOriginalRepoDeps :: IO [(DependencyName, DirectDependency)]
-parseAllOriginalRepoDeps = do
-  pDeps <- parse allDependencies "" <$> readFile "repoinfo/currentDepTree.dot"
+parseAllOriginalRepoDeps :: FilePath -> IO [(DependencyName, DirectDependency)]
+parseAllOriginalRepoDeps fp = do
+  pDeps <- parse allDependencies "" <$> readFile fp --"repoinfo/currentDepTree.dot"
   case pDeps of
     Left  parserError -> error $ show parserError
     Right deps        -> return deps
@@ -78,7 +78,7 @@ parseAllUpdatedRepoDeps = do
 -- repository.
 filterAllOriginalRepoIndirDeps :: IO [IndirectDependency]
 filterAllOriginalRepoIndirDeps = do
-  allDeps <- allInitialDepsGrouped
+  allDeps <- allInitialDepsGrouped "repoinfo/currentDepTree.dot"
   -- NB: These direct dependencies may also be indirect dependencies
   dDeps   <- originalDirectDeps
   let allDepsList     = nub (tuplesToList allDeps)
@@ -131,8 +131,8 @@ filterNewIndirectDeps = do
 -- | Checks for new direct dependencies added to the cabal file.
 filterNewDirDeps :: IO [DirectDependency]
 filterNewDirDeps = do
-  rName   <- parseRepoName
-  oldDeps <- parseAllOriginalRepoDeps
+  rName   <- parseRepoName "repoinfo/currentDepTree.dot"
+  oldDeps <- parseAllOriginalRepoDeps "repoinfo/currentDepTree.dot"
   newDeps <- parseAllUpdatedRepoDeps
   return . map snd $ filter (\x -> rName == fst x) newDeps \\ oldDeps
 
@@ -149,8 +149,8 @@ filterVersionChanges = do
 -- | Checks for direct dependencies that were removed.
 filterRemovedDirDeps :: IO [DirectDependency]
 filterRemovedDirDeps = do
-  rName   <- parseRepoName
-  oldDeps <- parseAllOriginalRepoDeps
+  rName   <- parseRepoName "repoinfo/currentDepTree.dot"
+  oldDeps <- parseAllOriginalRepoDeps "repoinfo/currentDepTree.dot"
   newDeps <- parseAllUpdatedRepoDeps
   return . map snd $ filter (\x -> rName == fst x) (oldDeps \\ newDeps)
 
@@ -170,13 +170,13 @@ filterRemovedIndirectDeps = do
 
 initialDepTree :: IO (Tree String)
 initialDepTree = do
-  rName <- parseRepoName
-  iDeps <- allInitialDepsGrouped
+  rName <- parseRepoName "repoinfo/currentDepTree.dot"
+  iDeps <- allInitialDepsGrouped "repoinfo/currentDepTree.dot"
   pure $ buildDepTree rName iDeps
 
 updatedDepTree :: IO (Tree String)
 updatedDepTree = do
-  rName <- parseRepoName
+  rName <- parseRepoName "repoinfo/currentDepTree.dot"
   iDeps <- allUpdatedDepsGrouped
   pure $ buildDepTree rName iDeps
 
@@ -184,8 +184,8 @@ updatedDepTree = do
 -- made to the cabal file.
 originalDirectDeps :: IO [DirectDependency]
 originalDirectDeps = do
-  rName <- parseRepoName
-  aDeps <- parseAllOriginalRepoDeps
+  rName <- parseRepoName "repoinfo/currentDepTree.dot"
+  aDeps <- parseAllOriginalRepoDeps "repoinfo/currentDepTree.dot"
   let repoDirDeps = packageDependencies rName aDeps
   pure $ concatMap snd repoDirDeps
 
@@ -193,7 +193,7 @@ originalDirectDeps = do
 -- made to the cabal file.
 updatedDirectDeps :: IO [DirectDependency]
 updatedDirectDeps = do
-  rName <- parseRepoName
+  rName <- parseRepoName "repoinfo/currentDepTree.dot"
   aDeps <- parseAllUpdatedRepoDeps
   let repoDirDeps = packageDependencies rName aDeps
   pure $ concatMap snd repoDirDeps
@@ -216,9 +216,9 @@ tuplesToList allDeps = do
   let tupleList = unzip allDeps
   fst tupleList ++ (concat $ snd tupleList)
 
-parseRepoName :: IO String
-parseRepoName = do
-  name <- parse packageName' "" <$> readFile "repoinfo/currentDepTree.dot"
+parseRepoName :: FilePath -> IO String
+parseRepoName fp = do
+  name <- parse packageName' "" <$> readFile fp
   case name of
     Left  parserError -> error $ show parserError
     Right deps        -> return deps

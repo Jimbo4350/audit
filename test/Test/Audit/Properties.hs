@@ -7,9 +7,7 @@ module Test.Audit.Properties where
 import           Audit.Generate                 ( initializeDB )
 import           Audit.Conversion               ( packageToParsedDep
                                                 , auditorEntryToParsedDep
-                                                , compareParsedWithAuditor
                                                 , newParsedDeps
-                                                , returnUpdatedAuditorEntry
                                                 , updatedAuditorValues
                                                 , auditorEntryToNotUsed
                                                 )
@@ -35,7 +33,6 @@ import           Audit.Tree                     ( buildDepTree
                                                 , indirectDeps
                                                 )
 import           Audit.Types                    ( Package(..)
-                                                , QPResult(..)
                                                 , ParsedDependency(..)
                                                 )
 import           Test.Audit.Gen                 ( genDependencyVersion
@@ -157,9 +154,10 @@ prop_clearAuditorTable = withTests 100 . property $ do
 prop_insertHash :: Property
 prop_insertHash = withTests 100 . property $ do
   testHash <- forAll genHash
-  liftIO $ insertHash "temp.db" testHash
+  liftIO . runEitherT $ insertHash "temp.db" testHash
   mHash <- liftIO $ queryHash "temp.db"
-  liftIO $ deleteHash "temp.db"
+  result <- liftIO . runEitherT $ deleteHash "temp.db"
+  evalEither result
   case mHash of
     Just h  -> hashCurrentHash h === testHash
     Nothing -> testHash === 0
@@ -168,8 +166,9 @@ prop_insertHash = withTests 100 . property $ do
 prop_deleteHash :: Property
 prop_deleteHash = withTests 100 . property $ do
   testHash <- forAll genHash
-  liftIO $ insertHash "temp.db" testHash
-  liftIO $ deleteHash "temp.db"
+  liftIO . runEitherT $ insertHash "temp.db" testHash
+  result <- liftIO . runEitherT $ deleteHash "temp.db"
+  evalEither result
   mHash <- liftIO $ queryHash "temp.db"
   case mHash of
     Just h  -> failWith Nothing $ "Hash still exists in the db: " ++ show h
@@ -206,10 +205,10 @@ prop_insertAuditorDeps = withTests 100 . property $ do
 prop_insertNewDirectDependency :: Property
 prop_insertNewDirectDependency = withTests 100 . property $ do
   indirParDep <- forAll genIndirectParsedDependency
-  liftIO $ insertAuditorDeps "temp.db" [indirParDep]
+  liftIO . runEitherT $ insertAuditorDeps "temp.db" [indirParDep]
 
   let identicalDirDep = indirParDep { isDirect = True }
-  liftIO $ insertAuditorDeps "temp.db" [identicalDirDep]
+  liftIO . runEitherT $ insertAuditorDeps "temp.db" [identicalDirDep]
 
   deps <- liftIO $ queryAuditor "temp.db"
   liftIO $ clearAuditorTable "temp.db"
@@ -225,7 +224,7 @@ prop_updateExistingDepStillUsed = withTests 100 . property $ do
     -- Populate db with dependency
   parsedDep <- forAll
     $ Gen.choice [genDirectParsedDependency, genIndirectParsedDependency]
-  liftIO $ insertAuditorDeps "temp.db" [parsedDep]
+  liftIO . runEitherT $ insertAuditorDeps "temp.db" [parsedDep]
 
   -- Create dependencies that are identical except the still used flag is switched
   deps <- liftIO $ queryAuditor "temp.db"
@@ -249,7 +248,7 @@ prop_updateRemovedDirectDependency = withTests 100 . property $ do
         -- Populate db with dependency
   parsedDep <- forAll
     $ Gen.choice [genDirectParsedDependency, genIndirectParsedDependency]
-  liftIO $ insertAuditorDeps "temp.db" [parsedDep]
+  liftIO . runEitherT $ insertAuditorDeps "temp.db" [parsedDep]
   initialDeps <- liftIO $ queryAuditor "temp.db"
 
   -- Create removed dependency names
@@ -285,7 +284,7 @@ prop_updateRemovedIndirectDependency :: Property
 prop_updateRemovedIndirectDependency = withTests 100 . property $ do
         -- Populate db with dependency
   parsedDep <- forAll genIndirectParsedDependency
-  liftIO $ insertAuditorDeps "temp.db" [parsedDep]
+  liftIO . runEitherT $ insertAuditorDeps "temp.db" [parsedDep]
   initialDeps <- liftIO $ queryAuditor "temp.db"
 
   -- Create removed dependency name
@@ -329,7 +328,7 @@ prop_updateChangedVersions = withTests 100 . property $ do
   -- Generate a db with dir and indir
   inDirParsedDep <- forAll genIndirectParsedDependency
   let dirParsedDep = inDirParsedDep {isDirect = True}
-  liftIO $ insertAuditorDeps "temp.db" [inDirParsedDep, dirParsedDep]
+  liftIO . runEitherT $ insertAuditorDeps "temp.db" [inDirParsedDep, dirParsedDep]
   initialDeps <- liftIO $ queryAuditor "temp.db"
 
   -- Generate a version change
