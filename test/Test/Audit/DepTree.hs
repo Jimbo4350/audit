@@ -21,6 +21,7 @@ import           Hedgehog.Internal.Property     ( Property
                                                 , withTests
                                                 , (===)
                                                 )
+import           System.Process                 ( callCommand )
 
 
 prop_simpleDeptree_construction_deconstruction :: Property
@@ -30,8 +31,10 @@ prop_simpleDeptree_construction_deconstruction = withTests 500 . property $ do
 
 prop_repoDeptree_construction_deconstruction :: Property
 prop_repoDeptree_construction_deconstruction = withTests 1 . property $ do
-  allDeps <- liftIO allInitialDepsGrouped
-  name    <- liftIO parseRepoName
+  liftIO $ callCommand "stack dot --external > currentDepTree.dot"
+  allDeps <- liftIO $ allInitialDepsGrouped "currentDepTree.dot"
+  name    <- liftIO $ parseRepoName "currentDepTree.dot"
+  liftIO $ callCommand "rm currentDepTree.dot"
   (sort . nub . deconstructDepTree $ buildDepTree name allDeps) === sort allDeps
 
 

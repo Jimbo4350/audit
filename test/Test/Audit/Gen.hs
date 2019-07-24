@@ -158,5 +158,5 @@ populateAuditorTempDb = do
   -- Populate auditor table with initial deps.
   cTime    <- liftIO getCurrentTime
   let packages = newParsedDeps versions dDeps inDeps cTime
-  liftIO $ insertAuditorDeps "temp.db" packages
+  liftIO . runEitherT $ insertAuditorDeps "temp.db" packages
   return packages

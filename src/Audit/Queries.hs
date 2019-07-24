@@ -109,7 +109,7 @@ getInDirAudEntryByDepName dbName dirDep = do
     $ filterInDirDepQuery dirDep
   liftIO $ close conn
   case entry of
-    Just aEntry -> pure aEntry
+    Just aEntry -> right aEntry
     Nothing     -> left $ NotInAuditorTable dirDep
 
 getAllVersionsOfDep

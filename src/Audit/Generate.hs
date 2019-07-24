@@ -44,10 +44,14 @@ import           Audit.Types                    ( Command(..)
                                                 , OperationError(..)
                                                 , OperationResult(..)
                                                 , UpdatedDepVersions(..)
+                                                , report
                                                 )
 
-import           Control.Monad.Trans.Either     ( runEitherT )
-import           Data.Either                    ( rights )
+import           Control.Monad.IO.Class         ( liftIO )
+import           Control.Monad.Trans.Either     ( EitherT
+                                                , right
+                                                , runEitherT
+                                                )
 import           Data.Hashable                  ( hash )
 import           Data.Time.Clock                ( getCurrentTime )
 import           System.Directory               ( getDirectoryContents )
@@ -60,24 +64,28 @@ import           System.Process                 ( callCommand )
 -- which holds the hash of the existing .dot file.
 -- If "auditor.db" is present, it generates a new `.dot` file and checks
 -- the hash of the existing `.dot` file against the new `.dot` file generated.
-checkDB :: IO HashStatus
+checkDB :: EitherT OperationError IO HashStatus
 checkDB = do
-  filenames <- getDirectoryContents "."
+  filenames <- liftIO $ getDirectoryContents "."
   if "auditor.db" `elem` filenames
     then do
-      print "auditor.db present"
-      print "Generating new dot file and checking hash"
-      callCommand "stack dot --external > repoinfo/updatedDepTree.dot"
-      callCommand "stack ls dependencies > repoinfo/updatedDepTreeVersions.txt"
-      contents <- (++) <$> readFile "repoinfo/updatedDepTree.dot" <*> readFile
-        "repoinfo/updatedDepTreeVersions.txt"
+      liftIO $ print "auditor.db present"
+      liftIO $ print "Generating new dot file and checking hash"
+      liftIO $ callCommand "stack dot --external > repoinfo/updatedDepTree.dot"
+      liftIO $ callCommand
+        "stack ls dependencies --test > repoinfo/updatedDepTreeVersions.txt"
+      contents <-
+        (++)
+        <$> (liftIO $ readFile "repoinfo/updatedDepTree.dot")
+        <*> (liftIO $ readFile "repoinfo/updatedDepTreeVersions.txt")
       checkHash "auditor.db" $ hash contents
     else return HashNotFound
 
 generateInitialDotFiles :: IO ()
 generateInitialDotFiles = do
   callCommand "stack dot --external > repoinfo/currentDepTree.dot"
-  callCommand "stack ls dependencies > repoinfo/currentDepTreeVersions.txt"
+  callCommand
+    "stack ls dependencies --test > repoinfo/currentDepTreeVersions.txt"
 
 initializeDB :: String -> IO ()
 initializeDB dbName =
@@ -93,100 +101,88 @@ initializeDB dbName =
                            \, still_used BOOL NOT NULL\
                            \, analysis_status VARCHAR NOT NULL);\
      \CREATE TABLE hash ( current_hash INT NOT NULL\
-                           \, PRIMARY KEY ( current_hash )); \
-     \CREATE TABLE diff     ( dependency_id INTEGER PRIMARY KEY AUTOINCREMENT\
-                           \, package_name VARCHAR NOT NULL\
-                           \, package_version VARCHAR NOT NULL\
-                           \, date_first_seen VARCHAR NOT NULL\
-                           \, direct_dep VARCHAR NOT NULL\
-                           \, still_used VARCHAR NOT NULL\
-                           \, analysis_status VARCHAR NOT NULL); \""
-
+                           \, PRIMARY KEY ( current_hash )); \""
 
 ------------------------------Handler-----------------------------------
 
 commandHandler :: Command -> IO ()
-commandHandler (Command cmd) | cmd == "audit" = audit
-                             | cmd == "load"  = update
-                             | otherwise      = print "Invalid command!"
+commandHandler (Command cmd)
+  | cmd == "audit" = do
+    result <- runEitherT audit
+    report result
+  | cmd == "load" = do
+    result <- runEitherT update
+    report result
+  | otherwise = print "Invalid command!"
 
-audit :: IO ()
+audit :: EitherT OperationError IO OperationResult
 audit = do
   hashStat <- checkDB
   case hashStat of
-    HashMatches ->
-      print
-        "Hashes match, dependency tree has not \
-                                 \been changed."
+    HashMatches -> do
+      liftIO $ print "Hashes match, dependency tree has not been changed."
+      right AuditHashMatches
     HashDoesNotMatch -> do
-      print "Hashes do not match, dependency tree has changed."
-      filterNewDirDeps >>= (\x -> print $ "New direct dependencies: " ++ show x)
-      filterNewIndirectDeps
-        >>= (\x -> print $ "New indirect dependencies: " ++ show x)
-      filterVersionChanges
-        >>= (\x -> print $ "New dependency versions: " ++ show x)
-      filterRemovedDirDeps
-        >>= (\x -> print $ "Removed direct dependencies: " ++ show x)
-      filterRemovedIndirectDeps
-        >>= (\x -> print $ "Removed indirect dependencies: " ++ show x)
-      pure ()
+      liftIO $ print "Hashes do not match, dependency tree has changed."
+      newDirDeps <- liftIO filterNewDirDeps
+      liftIO . print $ "New direct dependencies: " ++ show newDirDeps
+      newIndirDeps <- liftIO filterNewIndirectDeps
+      liftIO . print $ "New indirect dependencies: " ++ show newIndirDeps
+      vChanges <- liftIO filterVersionChanges
+      liftIO . print $ "New dependency versions: " ++ show vChanges
+      remDirDeps <- liftIO filterRemovedDirDeps
+      liftIO . print $ "Removed direct dependencies: " ++ show remDirDeps
+      remInDeps <- liftIO filterRemovedIndirectDeps
+      liftIO . print $ "Removed indirect dependencies: " ++ show remInDeps
+      right AuditHashDoesNotMatch
     HashNotFound -> do
-      print "Hash not found, generating db."
-      initializeDB "auditor.db"
-      generateInitialDotFiles
-      pVersions <- parseAllOriginalRepoVers
-      iDepTree  <- initialDepTree
-      cTime     <- getCurrentTime
+      liftIO $ print "Hash not found, generating db."
+      liftIO $ initializeDB "auditor.db"
+      liftIO generateInitialDotFiles
+      pVersions <- liftIO parseAllOriginalRepoVers
+      iDepTree  <- liftIO initialDepTree
+      cTime     <- liftIO getCurrentTime
       let packages = newParsedDeps (initDeps pVersions)
                                    (directDeps iDepTree)
                                    (indirectDeps iDepTree)
                                    cTime
-      insertAuditorDeps "auditor.db" packages
-      (++)
-        <$> readFile "repoinfo/currentDepTree.dot"
-        <*> readFile "repoinfo/currentDepTreeVersions.txt"
-        >>= insertHash "auditor.db"
-        .   hash
+      insResult <- insertAuditorDeps "auditor.db" packages
+      liftIO . report $ pure insResult
+      contents <-
+        (++)
+        <$> (liftIO $ readFile "repoinfo/currentDepTree.dot")
+        <*> (liftIO $ readFile "repoinfo/currentDepTreeVersions.txt")
+      hInsResult <- insertHash "auditor.db" $ hash contents
+      liftIO . report $ pure hInsResult
+      right AuditHashNotFound
 
-
-_report :: Either OperationError OperationResult -> IO ()
-_report (Right opRes) = print $ show opRes
-_report (Left  e    ) = print $ _renderOperationError e
-
-_renderOperationError :: OperationError -> String
-_renderOperationError (OnlyDirectDepenciesAllowed pkgs) =
-  "The following packages are not direct dependencies: " <> show pkgs
-_renderOperationError (OnlyIndirectDepenciesAllowed pkgs) =
-  "The following packages are not indirect dependencies: " <> show pkgs
-_renderOperationError (ConvError err) = "ConversionError: " <> show err
-
-update :: IO ()
+update :: EitherT OperationError IO OperationResult
 update = do
   -- New dependencies (Add to Auditor table)
-  newVersions            <- parseAllUpdatedRepoVers
-  newDDeps               <- filterNewDirDeps
-  newInDeps              <- filterNewIndirectDeps
-  cTime                  <- getCurrentTime
+  newVersions            <- liftIO parseAllUpdatedRepoVers
+  newDDeps               <- liftIO filterNewDirDeps
+  newInDeps              <- liftIO filterNewIndirectDeps
+  cTime                  <- liftIO getCurrentTime
 
 
-  allAuditorEntries      <- queryAuditor "auditor.db"
+  allAuditorEntries      <- liftIO $ queryAuditor "auditor.db"
 
   -- Removed dependencies (change stillUsed flag)
-  remDirDepsPackageNames <- filterRemovedDirDeps
+  remDirDepsPackageNames <- liftIO filterRemovedDirDeps
 
   -- Removed indirect dependencies
-  remIndirDeps           <- filterRemovedIndirectDeps
+  remIndirDeps           <- liftIO filterRemovedIndirectDeps
 
   -- New dependencies
   let newDeps =
         newParsedDeps (updatedDeps newVersions) newDDeps newInDeps cTime
 
   -- Version Changes
-  vChanges <- filterVersionChanges
+  vChanges <- liftIO $ filterVersionChanges
 
   case (newDeps, remDirDepsPackageNames, remIndirDeps, vChanges) of
-    ([], [], [], []) -> print "No dependency updates detected."
-    _            -> do
+    ([], [], [], []) -> right NoDependencyUpdatesDetected
+    _                -> do
       -- OVERALL FLOW. QUERY AUDITOR TABLE, USE LIST COMPREHENSION & PARSE RESULTS TO FILTER
       -- THE ENTRY/ENTRIES YOU ARE LOOKING FOR.
 
@@ -204,16 +200,16 @@ update = do
       -- if the package does not exist in the auditor table. This needs to be done for indirDeps aswell
       -- so your function should be agnostic.....
       eitherDirDepsToBeRemovedAuditor <- mapM
-        (runEitherT . getDirAudEntryByDepName "auditor.db")
+        (getDirAudEntryByDepName "auditor.db")
         remDirDepsPackageNames
       let dirDepsToBeRemovedAuditor =
-            map auditorEntryToNotUsed $ rights eitherDirDepsToBeRemovedAuditor
+            map auditorEntryToNotUsed eitherDirDepsToBeRemovedAuditor
 
       eitherIndirDepsToBeRemovedAuditor <- mapM
-        (runEitherT . getInDirAudEntryByDepName "auditor.db")
+        (getInDirAudEntryByDepName "auditor.db")
         remIndirDeps
       let indirDepsToBeRemovedAuditor =
-            map auditorEntryToNotUsed $ rights eitherIndirDepsToBeRemovedAuditor
+            map auditorEntryToNotUsed eitherIndirDepsToBeRemovedAuditor
 
       case
           ( newDepsAlreadyInAuditor
@@ -224,44 +220,53 @@ update = do
         of
         -- Insert actual new dependencies
           ([], [], [], []) -> do
-            print $ "Inserting new dependencies:" ++ show newDDeps
-            insertAuditorDeps "auditor.db" newDeps
+            liftIO . print $ "Inserting new dependencies:" ++ show newDDeps
+            insResult <- insertAuditorDeps "auditor.db" newDeps
+            liftIO . report $ pure insResult
             cleanUpAndUpdateHash
           -- Update existing dependencies/ Add new dependencies (see above)
           _ -> do
               -- If this is a new dep already in the auditor, it means we have
               -- re-added a direct dependency and need to adjust the stillUsed bool
 
-            mapM_ (runEitherT . updateAuditorEntryDirect "auditor.db")
-                  newDepsAlreadyInAuditor
+            updateResults <- mapM (updateAuditorEntryDirect "auditor.db") newDepsAlreadyInAuditor
+            mapM_ (liftIO . report . pure) updateResults
 
             -- Update removed dependencies (removedDirs = change DirectDep flag to false)
-            mapM_ (runEitherT . updateAuditorEntryDirect "auditor.db")
-                  dirDepsToBeRemovedAuditor
+            removedDirResults <- mapM (updateAuditorEntryDirect "auditor.db")
+                 dirDepsToBeRemovedAuditor
+            mapM_ (liftIO . report . pure) removedDirResults
 
             -- Update removed indirect dependencies
-            mapM_ (runEitherT . updateAuditorEntryDirect "auditor.db")
-                  indirDepsToBeRemovedAuditor
+            removedIndirResults <- mapM (updateAuditorEntryDirect "auditor.db")
+                 indirDepsToBeRemovedAuditor
+            mapM_ (liftIO . report . pure) removedIndirResults
 
             -- Version change updates
-            mapM_ (runEitherT . updateAuditorVersionChange "auditor.db") vChanges
+            vChangeResults <- mapM (updateAuditorVersionChange "auditor.db") vChanges
+            mapM_ (liftIO . report . pure) vChangeResults
 
-            print
-              "Overwriting original repository dependency \
+            liftIO
+              $ print
+                  "Overwriting original repository dependency \
                               \tree & clearing Diff table"
             cleanUpAndUpdateHash
 
-cleanUpAndUpdateHash :: IO ()
+cleanUpAndUpdateHash :: EitherT OperationError IO OperationResult
 cleanUpAndUpdateHash = do
-  generateInitialDotFiles
-  print "Deleting old hash."
-  deleteHash "auditor.db"
+  liftIO generateInitialDotFiles
+  liftIO $ print "Deleting old hash."
+  delResult <- deleteHash "auditor.db"
+  liftIO . report $ pure delResult
   -- `contents` will become the new hash
-  contents <- (++) <$> readFile "repoinfo/updatedDepTree.dot" <*> readFile
-    "repoinfo/updatedDepTreeVersions.txt"
+  contents <-
+    (++)
+    <$> (liftIO $ readFile "repoinfo/updatedDepTree.dot")
+    <*> (liftIO $ readFile "repoinfo/updatedDepTreeVersions.txt")
   -- Update hash in hash table
-  insertHash "auditor.db" $ hash contents
-  -- Delete the new dependencies (that was just added to the auditor table)
-  -- in the Diff table
-  callCommand "rm repoinfo/updatedDepTreeVersions.txt"
-  callCommand "rm repoinfo/updatedDepTree.dot"
+  hResult <- insertHash "auditor.db" $ hash contents
+  liftIO . report $ pure hResult
+  -- Delete the new dependency tree.
+  liftIO $ callCommand "rm repoinfo/updatedDepTreeVersions.txt"
+  liftIO $ callCommand "rm repoinfo/updatedDepTree.dot"
+  right CleanUpAndUpdateHash

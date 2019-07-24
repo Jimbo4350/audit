@@ -13,17 +13,17 @@ module Audit.Types
   , Package(..)
   , DependencyName
   , ParsedDependency(..)
-  , QPResult(..)
   , Version
+  , report
+  , renderOperationError
   )
 where
 
-import           Audit.Database                    ( Auditor )
+import           Audit.Database                 ( Auditor )
 
 import           Data.Text                      ( Text )
 import           Data.Time.Clock                ( UTCTime(..) )
 import           Data.Int                       ( Int32 )
-
 
 data AnalysisStatus
   = ASGhcBoot   -- Library is a GHC boot library shipped with GHC
@@ -37,27 +37,31 @@ data AnalysisStatus
 
 newtype Command = Command String
 
-data ConversionError =
-     UTCTimeParseError String
-  |  DiffToAuditorError Text
-  |  NewlyParsedDepDoesNotExistInDb
+newtype ConversionError = NewlyParsedDepDoesNotExistInDb { parsedDep :: ParsedDependency }
   deriving Show
 
 type DirectDependency = String
 
+type IndirectDependency = String
+
 -- | Tells us if the hash of the existing .dot file matches
 -- the hash of a newly generated .dot file or if the hash
 -- exists in the db.
-data HashStatus = HashMatches
-                | HashDoesNotMatch
-                | HashNotFound
-                deriving Show
+data HashStatus =
+    HashMatches
+  | HashDoesNotMatch
+  | HashNotFound
+  deriving Show
 
-type IndirectDependency = String
 
 data OperationError =
-   OnlyDirectDepenciesAllowed [ParsedDependency]
- | OnlyIndirectDepenciesAllowed [ParsedDependency]
+   ClearAuditorTableError String
+ | DeleteAuditorEntryError String
+ | DeleteHashError String
+ | InsertHashError String
+ | InsertAuditorDepsError String
+ | InvalidCommand String
+ | UpdateAuditorEntryError String
  | ConvError ConversionError
  | NotInAuditorTable String
  | ReadError String
@@ -65,46 +69,43 @@ data OperationError =
  deriving Show
 
 data OperationResult =
-    AlreadyAddedIndirectDependenciesDiff
-    -- ^ Already added indirect dependencies to the Diff table.
-  | AlreadyAddedDirectDependenciesDiff
-    -- ^ Already added direct dependencies to the Diff table.
-  | AlreadyAddedremovedDependenciesDiff
-    -- ^ Already added removed dependencies to the Diff table.
-  | AddedDirectDependenciesDiff
-    -- ^ Successfully added direct dependencies to the Diff table.
-  | AddedIndirectDependenciesDiff
-    -- ^ Successfully added indirect dependencies to the Diff table.
-  | NoDependenciesRemoved
-    -- ^ No dependencies have been removed.
-  | AddedRemovedDependenciesDiff
-    -- ^ Successfully added removed dependencies to the Diff table.
-  | AddedRemovedDependenciesAuditor
-    -- ^ Successfully added removed dependencies to the Auditor table.
-  | LoadedDiffTable
-    -- ^ Successfully updated the diff tables with dependencies.
-  | UpdatedExistingAuditorDepsWithDiffDeps
-    -- ^ Successfully updated existing Auditor table entries with
-    -- Diff table enteries
-  | LoadedNewDepsFromDiffIntoAuditor
-    -- ^ Successfully added new dependencies from the Diff table
-    -- to the Auditor table.
-  | NoDirectDependenciesToAdd
-    -- ^ After parsing the '.dot' files no changes were detected i.e
-    -- no new direct dependencies have been added.
-  | NoIndirectDependenciesToAdd
-    -- ^ After parsing the '.dot' files no changes were detected i.e
-    -- no new indirect dependencies have been added.
-  | NoRemovedDependenciesToAdd
-    -- ^ After parsing the '.dot' files no changes were detected i.e
-    -- no dependencies were removed.
-  | UpdatedAuditorTableStillUsed
+    AuditorDepsInserted
+    -- ^ Dependencies successfully inserted into the Auditor table
+  | AuditHashDoesNotMatch
+    -- ^ The dependency tree has been updated and therefore the hash
+    -- of the original dep tree does not match the hash of the updated
+    -- dep tree.
+  | AuditHashMatches
+    -- ^ The dependency tree has not been updated, therefore
+    -- the hashes of the original and updated dep tree are the
+    -- same.
+  | AuditHashNotFound
+    -- ^ Hash of the dependency tree not found. Most likely
+    -- because this is the first time the executable is being run.
+  | CleanUpAndUpdateHash
+    -- ^ Generate a new current state of the dependency tree.
+    -- Delete the old dependency tree's hash in the db, take
+    -- a new hash of the current dependency tree and insert it
+    -- into the Hash table.
+  | HashAlreadyPresent Int
+    -- ^ Hash already exists in hash table.
+  | HashInserted Int
+    -- ^ Hash was not found in the database.
+  | HashOperationResult HashStatus
+    -- ^ Current hash status.
+  | HashDeleted
+    -- ^ Hash deleted from the hash table.
+  | NoDependencyUpdatesDetected
+    -- ^ Hash successfully deleted from the database.
+  | UpdatedAuditorTableEntry
     -- ^ Updated the 'stillUsed' flag for specific enteries in the
     -- auditor table
   | SuccessfullyUpdatedVersion
     -- ^ Updated the version of a particular dependency.
   | VersionExistsInDb [Auditor]
+    -- Dependency version exists in the Auditor table.
   | VersionDoesNotExistInDb
+    -- Dependency version does not exist in the Auditor table.
   deriving Show
 
 
@@ -136,20 +137,35 @@ data Package = Package
 
 type DependencyName = String
 
--- | 'QPResult a' captures the difference
--- between a database query of dependencies and
--- the dependencies from the parsing of
--- the '.dot' files in the repoinfo dir.
-data QPResult a =
-    QueryAndParseIdentical
-    -- ^ Database query and parse result are the same
-  | QPDifference [a]
-    -- ^ Database query and parse result are different
-  | QPParseIsEmpty
-    -- ^ No changes detected between '.dot' files.
-  deriving (Eq, Show)
-
 newtype UpdatedDepVersions =
   UpdatedDepVersions { updatedDeps :: [(DependencyName, Version)] } deriving Show
 
 type Version = String
+
+
+--------------------------------------------------------------------------------
+-- Reporting
+--------------------------------------------------------------------------------
+
+
+report :: Either OperationError OperationResult -> IO ()
+report (Right opRes) = print $ show opRes
+report (Left  e    ) = print $ renderOperationError e
+
+renderOperationError :: OperationError -> String
+renderOperationError (ClearAuditorTableError err) =
+  "ClearAuditorTableError: " <> show err
+renderOperationError (ConvError err) = "ConversionError: " <> show err
+renderOperationError (DeleteAuditorEntryError err) =
+  "DeleteAuditorEntryError: " <> show err
+renderOperationError (DeleteHashError err) = "DeleteHashError: " <> show err
+renderOperationError (InsertHashError err) = "InsertHashError:" <> show err
+renderOperationError (InsertAuditorDepsError err) =
+  "InsertAuditorDepsError: " <> show err
+renderOperationError (InvalidCommand err) = "InvalidCommand: " <> show err
+renderOperationError (NotInAuditorTable err) =
+  "NotInAuditorTable: " <> show err
+renderOperationError (ReadError err) = "ReadError: " <> show err
+renderOperationError (UpdateAuditorEntryError err) =
+  "UpdateAuditorEntryError: " <> show err
+
