@@ -8,13 +8,16 @@ module Audit.Types
   , NewDependency(..)
   , OperationError(..)
   , OperationResult(..)
+  , ParsedRepo(..)
   , InitialDepVersions(..)
   , UpdatedDepVersions(..)
   , Package(..)
   , DependencyName
   , ParsedDependency(..)
+  , RepoName
   , Version
   , report
+  , reportMultiple
   , renderOperationError
   )
 where
@@ -48,8 +51,9 @@ type IndirectDependency = String
 -- the hash of a newly generated .dot file or if the hash
 -- exists in the db.
 data HashStatus =
-    HashMatches
-  | HashDoesNotMatch
+    HashMatches String
+  | HashDoesNotMatch String
+  | HashExists Int
   | HashNotFound
   deriving Show
 
@@ -58,6 +62,7 @@ data OperationError =
    ClearAuditorTableError String
  | DeleteAuditorEntryError String
  | DeleteHashError String
+ | HashNotFoundError String
  | InsertHashError String
  | InsertAuditorDepsError String
  | InvalidCommand String
@@ -71,11 +76,11 @@ data OperationError =
 data OperationResult =
     AuditorDepsInserted
     -- ^ Dependencies successfully inserted into the Auditor table
-  | AuditHashDoesNotMatch
+  | AuditHashDoesNotMatch RepoName
     -- ^ The dependency tree has been updated and therefore the hash
     -- of the original dep tree does not match the hash of the updated
     -- dep tree.
-  | AuditHashMatches
+  | AuditHashMatches RepoName
     -- ^ The dependency tree has not been updated, therefore
     -- the hashes of the original and updated dep tree are the
     -- same.
@@ -97,11 +102,12 @@ data OperationResult =
     -- ^ Hash deleted from the hash table.
   | NoDependencyUpdatesDetected
     -- ^ Hash successfully deleted from the database.
+  | SuccessfullyParsedRepos [ParsedRepo]
+  | SuccessfullyUpdatedVersion
+    -- ^ Updated the version of a particular dependency.
   | UpdatedAuditorTableEntry
     -- ^ Updated the 'stillUsed' flag for specific enteries in the
     -- auditor table
-  | SuccessfullyUpdatedVersion
-    -- ^ Updated the version of a particular dependency.
   | VersionExistsInDb [Auditor]
     -- Dependency version exists in the Auditor table.
   | VersionDoesNotExistInDb
@@ -116,13 +122,20 @@ newtype InitialDepVersions =
   InitialDepVersions { initDeps :: [(DependencyName, Version)] } deriving Show
 
 data ParsedDependency = ParsedDependency
-    { depName    :: Text
+    { repoName   :: Text
+    , depName    :: Text
     , depVersion :: Text
     , firstSeen  :: UTCTime
     , isDirect   :: Bool
     , inUse      :: Bool
     , aStatus    :: [AnalysisStatus]
     } deriving (Eq, Ord,Show)
+
+data ParsedRepo = ParsedRepo
+  { parsedDeps :: [ParsedDependency]
+  , repoHash :: Int
+  , parsedRepoName :: RepoName
+  } deriving Show
 
 data Package = Package
     { packageId      :: Int32
@@ -136,7 +149,7 @@ data Package = Package
 
 
 type DependencyName = String
-
+type RepoName = String
 newtype UpdatedDepVersions =
   UpdatedDepVersions { updatedDeps :: [(DependencyName, Version)] } deriving Show
 
@@ -147,6 +160,10 @@ type Version = String
 -- Reporting
 --------------------------------------------------------------------------------
 
+
+reportMultiple :: Either OperationError [OperationResult] -> IO ()
+reportMultiple (Right opRes) = mapM_ (print . show) opRes
+reportMultiple (Left  e    ) = print $ renderOperationError e
 
 report :: Either OperationError OperationResult -> IO ()
 report (Right opRes) = print $ show opRes
@@ -159,6 +176,7 @@ renderOperationError (ConvError err) = "ConversionError: " <> show err
 renderOperationError (DeleteAuditorEntryError err) =
   "DeleteAuditorEntryError: " <> show err
 renderOperationError (DeleteHashError err) = "DeleteHashError: " <> show err
+renderOperationError (HashNotFoundError err) = "HashNotFoundError: " <> show err
 renderOperationError (InsertHashError err) = "InsertHashError:" <> show err
 renderOperationError (InsertAuditorDepsError err) =
   "InsertAuditorDepsError: " <> show err

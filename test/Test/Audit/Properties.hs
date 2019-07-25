@@ -5,8 +5,7 @@ module Test.Audit.Properties where
 
 
 import           Audit.Generate                 ( initializeDB )
-import           Audit.Conversion               ( packageToParsedDep
-                                                , auditorEntryToParsedDep
+import           Audit.Conversion               ( auditorEntryToParsedDep
                                                 , newParsedDeps
                                                 , updatedAuditorValues
                                                 , auditorEntryToNotUsed
@@ -138,17 +137,6 @@ prop_clearAuditorTable = withTests 100 . property $ do
   liftIO $ clearAuditorTable "temp.db"
   potentialValues <- liftIO $ queryAuditor "temp.db"
   potentialValues === []
-
--- TODO: Redo this property
---prop_deleteAuditorEntry :: Property
---prop_deleteAuditorEntry = do
---  withTests 100 . property $ do
---    pkg <- forAll genPackage
---    liftIO . insertAuditorDeps "temp.db" $ map packageToParsedDep [pkg]
---    liftIO $ deleteAuditorEntry "temp.db" (pkgToAuditor pkg)
---    query <- liftIO $ queryAuditor "temp.db"
---    query === []
-
 
 -- | Insert a hash, query the hash from the db and test for equivalence.
 prop_insertHash :: Property

@@ -32,6 +32,7 @@ import           Audit.Types                    ( DependencyName
                                                 , OperationError(..)
                                                 , OperationResult(..)
                                                 , ParsedDependency(..)
+                                                , RepoName
                                                 , Version
                                                 , report
                                                 )
@@ -41,8 +42,11 @@ import           Control.Exception              ( catches
                                                 )
 import           Control.Monad.Trans.Either     ( EitherT
                                                 , firstEitherT
+                                                , handleLeftT
                                                 , hoistEither
                                                 , right
+                                                , runEitherT
+                                                , secondEitherT
                                                 )
 import           Data.Time.Clock                ( getCurrentTime )
 import           Data.Text                      ( pack )
@@ -63,49 +67,47 @@ import           Database.SQLite.Simple         ( close
 --------------------------------------------------------------------------------
 
 -- | Takes a hash and compares it to the database hash.
-checkHash :: String -> Int -> EitherT OperationError IO HashStatus
-checkHash dbName testHash = do
-  entry <- liftIO $ queryHash dbName
+checkHash :: String -> Int -> RepoName -> EitherT OperationError IO HashStatus
+checkHash dbName testHash rName = do
+  entry <- handleLeftT (\_ -> right HashNotFound) . secondEitherT (HashExists . hashCurrentHash) $ queryHash dbName rName
   case entry of
-    Just dbH -> do
-      let dbHashInt = hashCurrentHash dbH
-      if testHash == dbHashInt
-        then right HashMatches
-        else right HashDoesNotMatch
-    Nothing -> right HashNotFound
+    HashExists h ->
+      if testHash == h
+        then right $ HashMatches rName
+        else right $ HashDoesNotMatch rName
+    _ -> right HashNotFound
 
 
 -- | Deletes the hash in the hash table.
-deleteHash :: String -> EitherT OperationError IO OperationResult
-deleteHash dbName = do
+deleteHash :: String -> RepoName -> EitherT OperationError IO OperationResult
+deleteHash dbName rName = do
   conn  <- liftIO $ open dbName
-  cHash <- liftIO $ queryHash dbName
+  cHash <- handleLeftT (\_ -> right $ HashOperationResult HashNotFound) . secondEitherT (HashOperationResult . HashExists . hashCurrentHash) $ queryHash dbName rName
   case cHash of
-    Just dbH -> do
-      let dbHashInt = hashCurrentHash dbH
+    (HashOperationResult (HashExists dbHashInt)) -> do
       let deleteCmd = runBeamSqlite conn $ runDelete $ delete
             (hash auditorDb)
             (\table -> hashCurrentHash table ==. val_ dbHashInt)
       liftIO $ exceptionCatcher deleteCmd DeleteHashError
       liftIO $ close conn
       right HashDeleted
-    Nothing -> do
+    _ -> do
       liftIO $ close conn
       right $ HashOperationResult HashNotFound
 
 -- | Takes a hash and inserts it into the Hash table.
-insertHash :: String -> Int -> EitherT OperationError IO OperationResult
-insertHash dbFilename dHash = do
-  curHash <- liftIO $ queryHash dbFilename
+insertHash :: String -> Int -> RepoName -> EitherT OperationError IO OperationResult
+insertHash dbFilename dHash rName = do
+  curHash <- handleLeftT (\_ -> right $ HashOperationResult HashNotFound) . secondEitherT (HashOperationResult . HashExists . hashCurrentHash) $ queryHash dbFilename rName
   case curHash of
-    Just h  -> right . HashAlreadyPresent $ hashCurrentHash h
-    Nothing -> do
+    (HashOperationResult (HashExists dbHashInt))  -> right . HashAlreadyPresent $ dbHashInt
+    _ -> do
       conn <- liftIO $ open dbFilename
       let insertCmd =
             runBeamSqlite conn
               $ runInsert
               $ insert (hash auditorDb)
-              $ insertValues [Hash dHash]
+              $ insertValues [Hash (pack rName) dHash]
       liftIO $ exceptionCatcher insertCmd InsertHashError
       liftIO $ close conn
       right $ HashInserted dHash
@@ -149,7 +151,8 @@ insertAuditorDeps dbFilename pkgs = do
           $ runInsert
           $ insert (auditor auditorDb)
           $ insertExpressions audExp
-  liftIO $ exceptionCatcher insertCMD InsertAuditorDepsError
+  liftIO insertCMD
+  --liftIO $ exceptionCatcher insertCMD InsertAuditorDepsError
   liftIO $ close conn
   right AuditorDepsInserted
 
@@ -217,6 +220,7 @@ updateAuditorVersionChange dbName changedVersion = do
                          }
             )
             pDeps
+      -- TODO: Handle the different cases here [priority:2]
       insertAuditorDeps dbName newAuditorEntryVersions
       right SuccessfullyUpdatedVersion
     _ -> error "updateAuditorVersionChange: Should not happen"
