@@ -6,7 +6,6 @@ module Audit.Conversion
   , auditorEntryToNotUsed
   , compareParsedWithAuditor
   , newParsedDeps
-  , packageToParsedDep
   , parsedDepToAudQExpr
   , returnUpdatedAuditorEntry
   , updatedAuditorValues
@@ -22,6 +21,7 @@ import           Audit.Types                    ( DirectDependency
                                                 , ParsedDependency(..)
                                                 , ConversionError(..)
                                                 , DependencyName
+                                                , RepoName
                                                 , Version
                                                 )
 
@@ -41,7 +41,8 @@ auditorEntryToParsedDep :: Auditor -> Either String ParsedDependency
 auditorEntryToParsedDep aEnt =
   case readEither (unpack $ auditorAnalysisStatus aEnt) of
     Left  err   -> Left err
-    Right aStat -> pure $ ParsedDependency (auditorPackageName aEnt)
+    Right aStat -> pure $ ParsedDependency (auditorRepoName aEnt)
+                                           (auditorPackageName aEnt)
                                            (auditorPackageVersion aEnt)
                                            (auditorDateFirstSeen aEnt)
                                            (auditorDirectDep aEnt)
@@ -64,12 +65,13 @@ compareParsedWithAuditor prsDep audEnt = all (== True) $ zipWith
 -- | Build package/dependency list for the initialization of
 -- the database.
 newParsedDeps
-  :: [(DependencyName, Version)]
+  :: RepoName
+  -> [(DependencyName, Version)]
   -> [DirectDependency]
   -> [IndirectDependency]
   -> UTCTime
   -> [ParsedDependency]
-newParsedDeps pVersions dDeps indirDeps currTime = do
+newParsedDeps rName pVersions dDeps indirDeps currTime = do
 
   let directPackages   = map (directPkg currTime) dDeps
   let indirectPackages = map (indirectPkg currTime) indirDeps
@@ -78,25 +80,14 @@ newParsedDeps pVersions dDeps indirDeps currTime = do
  where
   lookupVersion x = pack $ fromMaybe "No version Found" (lookup x pVersions)
   directPkg time x =
-    ParsedDependency (pack x) (lookupVersion x) time True True []
+    ParsedDependency (pack rName) (pack x) (lookupVersion x) time True True []
   indirectPkg time x =
-    ParsedDependency (pack x) (lookupVersion x) time False True []
-
--- Only makes sense within the context of comparing a query with a parsed result.
--- The database has an additional dependency_id column which gets set upon new
--- dependency insertion but we still need to compare newly parsed
--- dependency tree changes with existing entries in the database.
-packageToParsedDep :: Package -> ParsedDependency
-packageToParsedDep pkg = ParsedDependency (packageName pkg)
-                                          (packageVersion pkg)
-                                          (dateFirstSeen pkg)
-                                          (directDep pkg)
-                                          (stillUsed pkg)
-                                          (analysisStatus pkg)
+    ParsedDependency (pack rName) (pack x) (lookupVersion x) time False True []
 
 parsedDepToAudQExpr :: ParsedDependency -> AuditorT (QExpr Sqlite s)
-parsedDepToAudQExpr (ParsedDependency pName pVersion dateFS dDep sUsed aStatus)
+parsedDepToAudQExpr (ParsedDependency pRepoName pName pVersion dateFS dDep sUsed aStatus)
   = Auditor default_
+            (val_ pRepoName)
             (val_ pName)
             (val_ pVersion)
             (val_ dateFS)
@@ -105,8 +96,8 @@ parsedDepToAudQExpr (ParsedDependency pName pVersion dateFS dDep sUsed aStatus)
             (val_ (pack $ show aStatus))
 
 parsedDepToAud :: Int32 -> ParsedDependency -> Auditor
-parsedDepToAud pId (ParsedDependency pName pVersion dateFS dDep sUsed aStatus)
-  = Auditor pId pName pVersion dateFS dDep sUsed (pack $ show aStatus)
+parsedDepToAud pId (ParsedDependency pRepoName pName pVersion dateFS dDep sUsed aStatus)
+  = Auditor pId pRepoName pName pVersion dateFS dDep sUsed (pack $ show aStatus)
 
 returnUpdatedAuditorEntry
   :: ParsedDependency -> Auditor -> Either ConversionError Auditor

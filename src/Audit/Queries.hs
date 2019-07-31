@@ -15,18 +15,26 @@ import           Audit.Database                 ( Auditor
                                                 , AuditorDb(..)
                                                 , AuditorT(..)
                                                 , Hash
+                                                , HashT(..)
                                                 , auditorDb
                                                 )
 import           Audit.Types                    ( DirectDependency
                                                 , DependencyName
+                                                , HashStatus(..)
                                                 , IndirectDependency
                                                 , OperationError(..)
                                                 , OperationResult(..)
+                                                , RepoName
                                                 , Version
                                                 )
 
-import           Control.Monad.Trans.Either     ( EitherT , left, right)
-import           Data.Text                      ( pack, Text )
+import           Control.Monad.Trans.Either     ( EitherT
+                                                , left
+                                                , right
+                                                )
+import           Data.Text                      ( pack
+                                                , Text
+                                                )
 import           Database.Beam
 import           Database.Beam.Sqlite.Connection
                                                 ( runBeamSqlite
@@ -39,11 +47,7 @@ import           Database.SQLite.Simple         ( close
 filterAllVersionsOfDepQuery
   :: DependencyName -> Q Sqlite AuditorDb s (AuditorT (QExpr Sqlite s))
 filterAllVersionsOfDepQuery dep =
-  filter_
-      (\dependency ->
-        auditorPackageName dependency
-          ==. (val_ $ pack dep)
-      )
+  filter_ (\dependency -> auditorPackageName dependency ==. (val_ $ pack dep))
     $ all_ (auditor auditorDb)
 
 filterDirDepQuery
@@ -71,7 +75,8 @@ filterInDirDepQuery dirDep =
     $ all_ (auditor auditorDb)
 
 filterSpecificDependencyVersion
-  :: (DependencyName, Version) -> Q Sqlite AuditorDb s (AuditorT (QExpr Sqlite s))
+  :: (DependencyName, Version)
+  -> Q Sqlite AuditorDb s (AuditorT (QExpr Sqlite s))
 filterSpecificDependencyVersion (dep, version) =
   filter_
       (\dependency ->
@@ -81,6 +86,11 @@ filterSpecificDependencyVersion (dep, version) =
           ==. (val_ $ pack version)
       )
     $ all_ (auditor auditorDb)
+
+filterSpecificHash :: RepoName -> Q Sqlite AuditorDb s (HashT (QExpr Sqlite s))
+filterSpecificHash rName =
+  filter_ (\hashEntry -> hashRepoName hashEntry ==. (val_ $ pack rName))
+    $ all_ (hash auditorDb)
 
 getDirAudEntryByDepName
   :: String -> DirectDependency -> EitherT OperationError IO Auditor
@@ -115,7 +125,7 @@ getInDirAudEntryByDepName dbName dirDep = do
 getAllVersionsOfDep
   :: String -> DependencyName -> EitherT OperationError IO [Auditor]
 getAllVersionsOfDep dbName dep = do
-  conn  <- liftIO $ open dbName
+  conn    <- liftIO $ open dbName
   entries <-
     liftIO
     . runBeamSqlite conn
@@ -125,7 +135,7 @@ getAllVersionsOfDep dbName dep = do
   liftIO $ close conn
   case entries of
     [] -> left $ NotInAuditorTable dep
-    _ -> pure entries
+    _  -> pure entries
 
 -- | Returns all entries in the Auditor table.
 queryAuditor :: String -> IO [Auditor]
@@ -144,9 +154,12 @@ queryAuditorDepNames dbName = do
   close conn
   return $ map auditorPackageName entries
 
-queryAuditorSpecificVersion :: String -> (DependencyName, Version) -> EitherT OperationError IO OperationResult
-queryAuditorSpecificVersion dbName (depName,version) = do
-  conn <- liftIO $ open dbName
+queryAuditorSpecificVersion
+  :: String
+  -> (DependencyName, Version)
+  -> EitherT OperationError IO OperationResult
+queryAuditorSpecificVersion dbName (depName, version) = do
+  conn    <- liftIO $ open dbName
   entries <-
     liftIO
     . runBeamSqlite conn
@@ -156,14 +169,20 @@ queryAuditorSpecificVersion dbName (depName,version) = do
   liftIO $ close conn
   case entries of
     [] -> right VersionDoesNotExistInDb
-    _ -> right $ VersionExistsInDb entries
+    _  -> right $ VersionExistsInDb entries
 
 
 -- | Query and returns the hash in db.
-queryHash :: String -> IO (Maybe Hash)
-queryHash str = do
-  conn <- open str
-  let allEntries = all_ (hash auditorDb)
-  entry <- runBeamSqlite conn $ runSelectReturningOne $ select allEntries
-  close conn
-  return entry
+queryHash :: String -> RepoName -> EitherT OperationError IO Hash
+queryHash str rName = do
+  conn   <- liftIO $ open str
+  hEntry <-
+    liftIO
+    . runBeamSqlite conn
+    . runSelectReturningOne
+    . select
+    $ filterSpecificHash rName
+  liftIO $ close conn
+  case hEntry of
+    Just h-> right h
+    Nothing -> left $ HashNotFoundError rName

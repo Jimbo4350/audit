@@ -29,6 +29,7 @@ import           Database.Beam.Sqlite.Connection
 
 data AuditorT f = Auditor
   { auditorDependencyId   :: Columnar f Int32
+  , auditorRepoName       :: Columnar f Text
   , auditorPackageName    :: Columnar f Text
   , auditorPackageVersion :: Columnar f Text
   , auditorDateFirstSeen  :: Columnar f UTCTime
@@ -54,7 +55,8 @@ instance Beamable (PrimaryKey AuditorT)
 -- and .txt file.
 
 data HashT f = Hash
-  { hashCurrentHash :: Columnar f Int
+  { hashRepoName    :: Columnar f Text
+  , hashCurrentHash :: Columnar f Int
   } deriving Generic
 
 type Hash = HashT Identity

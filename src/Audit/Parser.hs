@@ -19,12 +19,12 @@ import           Audit.Types                    ( Command(..)
 
 import           Data.List                      ( concat
                                                 , intercalate
+                                                , intersperse
                                                 )
 import           Data.Semigroup                 ( (<>) )
 import           Options.Applicative            ( Parser
                                                 , help
                                                 , long
-                                                , metavar
                                                 , strOption
                                                 )
 import           Text.Parsec
@@ -32,8 +32,16 @@ import           Text.Parsec
 -- | Returns name of the repo.
 packageName' :: Parsec String () String
 packageName' = do
-  _ <- digraphRemoval
-  concat <$> mainPackage <* styleRemoval
+  _          <- digraphRemoval
+  parsedList <- mainPackage <* styleRemoval
+  -- TODO: This is a hack for package names with hypens in them
+  -- `Parsec` does not have an ascii combinator. Switch to
+  --  Megaparsec. [priority:2]
+  if length parsedList <= 1
+    then return $ concat parsedList
+    else
+      return . concat $ intersperse "-" parsedList
+
 
 -- | Returns all dependencies.
 allDependencies :: Parsec String () [(String, String)]
@@ -122,6 +130,7 @@ dependencyVersion = do
 
 getCommand :: Parser Command
 getCommand = Command <$> strOption
-  (long "audit" <> metavar "TARGET" <> help
-    "Enter currentstate or updatecurrentstate"
+  (  long "audit"
+  <> help
+       "Audit the current dependency tree and compare it to an updated dependency tree if there have been changes."
   )
