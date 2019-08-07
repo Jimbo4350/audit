@@ -89,6 +89,7 @@ test-suite audit-test
   other-modules:
       Test.Audit.DepTree
       Test.Audit.Gen
+      Test.Audit.ModelProperties
       Test.Audit.Properties
   hs-source-dirs:
       test
@@ -106,6 +107,7 @@ test-suite audit-test
     , optparse-applicative
     , parsec
     , process
+    , random
     , sqlite-simple
     , text
     , time

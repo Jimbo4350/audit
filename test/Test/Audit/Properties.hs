@@ -27,6 +27,7 @@ import           Audit.Queries                  ( getDirAudEntryByDepName
                                                 , queryAuditor
                                                 , queryHash
                                                 )
+import           Audit.Sorting                  ( parseRepoName )
 import           Audit.Tree                     ( buildDepTree
                                                 , directDeps
                                                 , indirectDeps
@@ -97,16 +98,17 @@ prop_newParsedDeps = withTests 100 . property $ do
   let dDeps  = directDeps $ buildDepTree "MainRepository" xs
   let inDeps = indirectDeps $ buildDepTree "MainRepository" xs
   versions <- forAll $ genNameVersions (dDeps ++ inDeps)
+  repoName <- liftIO $ parseRepoName "currentDepTree.dot"
 
   cTime    <- liftIO getCurrentTime
   -- Build `Package` list
-  let pkgs      = newParsedDeps versions dDeps inDeps cTime
+  let pkgs      = newParsedDeps repoName versions dDeps inDeps cTime
 
   -- Build direct dependencies only
-  let dirPkgs   = newParsedDeps versions dDeps [] cTime
+  let dirPkgs   = newParsedDeps repoName versions dDeps [] cTime
 
   -- Build direct dependencies only
-  let indirPkgs = newParsedDeps versions [] inDeps cTime
+  let indirPkgs = newParsedDeps repoName versions [] inDeps cTime
 
 
   -- Deconstruct `Packages`s to strings
@@ -142,25 +144,25 @@ prop_clearAuditorTable = withTests 100 . property $ do
 prop_insertHash :: Property
 prop_insertHash = withTests 100 . property $ do
   testHash <- forAll genHash
-  liftIO . runEitherT $ insertHash "temp.db" testHash
-  mHash <- liftIO $ queryHash "temp.db"
-  result <- liftIO . runEitherT $ deleteHash "temp.db"
-  evalEither result
+  rName  <- liftIO $ parseRepoName "currentDepTree.dot"
+  liftIO . runEitherT $ insertHash "temp.db" testHash rName
+  mHash  <- liftIO . runEitherT $ queryHash "temp.db" rName
   case mHash of
-    Just h  -> hashCurrentHash h === testHash
-    Nothing -> testHash === 0
+    Right h  -> hashCurrentHash h === testHash
+    Left err -> failWith Nothing $ show err
 
 -- | Insert a hash, delete it and make sure the db is empty.
 prop_deleteHash :: Property
 prop_deleteHash = withTests 100 . property $ do
   testHash <- forAll genHash
-  liftIO . runEitherT $ insertHash "temp.db" testHash
-  result <- liftIO . runEitherT $ deleteHash "temp.db"
+  rName  <- liftIO $ parseRepoName "currentDepTree.dot"
+  liftIO . runEitherT $ insertHash "temp.db" testHash rName
+  result <- liftIO . runEitherT $ deleteHash "temp.db" rName
   evalEither result
-  mHash <- liftIO $ queryHash "temp.db"
+  mHash <- liftIO . runEitherT $ queryHash "temp.db" rName
   case mHash of
-    Just h  -> failWith Nothing $ "Hash still exists in the db: " ++ show h
-    Nothing -> assert True
+    Right h  -> failWith Nothing $ "Hash still exists in the db: " ++ show h
+    Left _ -> assert True
 
 -- | Inserts direct and indirect dependencies into the auditor table.
 -- It then compares what was inserted into the
@@ -315,22 +317,27 @@ prop_updateChangedVersions :: Property
 prop_updateChangedVersions = withTests 100 . property $ do
   -- Generate a db with dir and indir
   inDirParsedDep <- forAll genIndirectParsedDependency
-  let dirParsedDep = inDirParsedDep {isDirect = True}
-  liftIO . runEitherT $ insertAuditorDeps "temp.db" [inDirParsedDep, dirParsedDep]
+  let dirParsedDep = inDirParsedDep { isDirect = True }
+  liftIO . runEitherT $ insertAuditorDeps "temp.db"
+                                          [inDirParsedDep, dirParsedDep]
   initialDeps <- liftIO $ queryAuditor "temp.db"
 
   -- Generate a version change
-  newVer <- forAll genDependencyVersion
+  newVer      <- forAll genDependencyVersion
 
   -- update db with the changes
-  liftIO . runEitherT $ updateAuditorVersionChange "temp.db" (unpack $ depName dirParsedDep,newVer)
+  liftIO . runEitherT $ updateAuditorVersionChange
+    "temp.db"
+    (unpack $ depName dirParsedDep, newVer)
 
   -- Query the auditor for all instances of the change
   -- and compare that with the updated changes generated.
   updatedDeps <- liftIO $ queryAuditor "temp.db"
   liftIO $ clearAuditorTable "temp.db"
 
-  let dbUpatedDeps = filter (\audDep -> auditorPackageVersion audDep == pack newVer) updatedDeps
+  let dbUpatedDeps = filter
+        (\audDep -> auditorPackageVersion audDep == pack newVer)
+        updatedDeps
   let dbInitialDeps = updatedDeps \\ dbUpatedDeps
 
   -- Check the updated deps have indeed been updated
@@ -340,7 +347,7 @@ prop_updateChangedVersions = withTests 100 . property $ do
   2 === length dbUpatedDeps
 
   -- The initial deps should only have changed stillUsed flags
-  map (\dep -> dep {auditorStillUsed = False}) initialDeps === dbInitialDeps
+  map (\dep -> dep { auditorStillUsed = False }) initialDeps === dbInitialDeps
 
 
 tests :: IO Bool

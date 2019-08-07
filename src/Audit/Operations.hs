@@ -20,6 +20,7 @@ import           Audit.Database                 ( Auditor
                                                 , auditorDb
                                                 )
 import           Audit.Conversion               ( auditorEntryToParsedDep
+                                                , parsedDepToAuditor
                                                 , parsedDepToAudQExpr
                                                 )
 import           Audit.Queries                  ( getAllVersionsOfDep
@@ -45,7 +46,6 @@ import           Control.Monad.Trans.Either     ( EitherT
                                                 , handleLeftT
                                                 , hoistEither
                                                 , right
-                                                , runEitherT
                                                 , secondEitherT
                                                 )
 import           Data.Time.Clock                ( getCurrentTime )
@@ -154,7 +154,7 @@ insertAuditorDeps dbFilename pkgs = do
   liftIO insertCMD
   --liftIO $ exceptionCatcher insertCMD InsertAuditorDepsError
   liftIO $ close conn
-  right AuditorDepsInserted
+  right . AuditorDepsInserted $ map parsedDepToAuditor pkgs
 
 updateAuditorEntryDirect
   :: String -> Auditor -> EitherT OperationError IO OperationResult
@@ -166,7 +166,7 @@ updateAuditorEntryDirect dbName updatedPackage = do
   liftIO $ exceptionCatcher updateCmd UpdateAuditorEntryError
   --let updateCmd =
   liftIO $ close conn
-  pure UpdatedAuditorTableEntry
+  pure $ UpdatedAuditorTableEntry updatedPackage
 
 updateAuditorVersionChange
   :: String

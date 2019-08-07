@@ -41,6 +41,7 @@ data AuditorT f = Auditor
 type Auditor = AuditorT Identity
 
 deriving instance Eq Auditor
+deriving instance Ord Auditor
 deriving instance Show Auditor
 
 instance Beamable AuditorT

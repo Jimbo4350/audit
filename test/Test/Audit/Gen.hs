@@ -9,6 +9,7 @@ module Test.Audit.Gen
   , genNameVersions
   , genPackage
   , genPackageName
+  , genAuditorEntries
   , genDependencyVersion
   , genRemovedPackage
   , genSimpleDepList
@@ -20,9 +21,9 @@ where
 import           Audit.Database                 ( Auditor
                                                 , AuditorT(..)
                                                 )
-import           Audit.Conversion               ( newParsedDeps )
+import           Audit.Conversion               ( newParsedDeps, parsedDepToAuditor )
 import           Audit.Operations               ( insertAuditorDeps )
-import           Audit.Sorting                  ( groupParseResults )
+import           Audit.Sorting                  ( groupParseResults , parseRepoName )
 import           Audit.Tree                     ( buildDepTree
                                                 , directDeps
                                                 , indirectDeps
@@ -47,18 +48,19 @@ import           Hedgehog.Internal.Gen          ( generalize )
 import qualified Hedgehog.Range                as Range
 
 
-genAnalysisStatus :: Gen [AnalysisStatus]
+genAnalysisStatus :: MonadGen n => n [AnalysisStatus]
 genAnalysisStatus = Gen.list
   (Range.singleton 1)
   (Gen.element
     [ASGhcBoot, ASCommon, ASCritical, ASCrypto, ASUncategoried, ASNewDependency]
   )
 
-genAuditor :: Gen Auditor
+genAuditor :: MonadGen n => n Auditor
 genAuditor = do
   parDep <- Gen.choice [genDirectParsedDependency, genIndirectParsedDependency]
   pId    <- Gen.integral Range.constantBounded
   pure $ Auditor pId
+                 (repoName parDep)
                  (depName parDep)
                  (depVersion parDep)
                  (firstSeen parDep)
@@ -67,28 +69,30 @@ genAuditor = do
                  (pack . show $ aStatus parDep)
 
 -- | Generate a direct dependency
-genDirectParsedDependency :: Gen ParsedDependency
+genDirectParsedDependency :: MonadGen n => n ParsedDependency
 genDirectParsedDependency = do
+  rName    <- genPackageName
   pName    <- genPackageName
   pVersion <- genDependencyVersion
   pTime    <- genUTCTime
   dDep     <- pure True
   sUsed    <- Gen.bool
   aStat    <- genAnalysisStatus
-  pure $ ParsedDependency (pack pName) (pack pVersion) pTime dDep sUsed aStat
+  pure $ ParsedDependency (pack rName) (pack pName) (pack pVersion) pTime dDep sUsed aStat
 
 -- | Generate an indirect dependency
-genIndirectParsedDependency :: Gen ParsedDependency
+genIndirectParsedDependency :: MonadGen n => n ParsedDependency
 genIndirectParsedDependency = do
+  rName    <- genPackageName
   pName    <- genPackageName
   pVersion <- genDependencyVersion
   pTime    <- genUTCTime
   dDep     <- pure False
   sUsed    <- Gen.bool
   aStat    <- genAnalysisStatus
-  pure $ ParsedDependency (pack pName) (pack pVersion) pTime dDep sUsed aStat
+  pure $ ParsedDependency (pack rName) (pack pName) (pack pVersion) pTime dDep sUsed aStat
 
-genHash :: Gen Int
+genHash :: MonadGen n => n Int
 genHash = Gen.int Range.constantBounded
 
 genNameVersions :: [String] -> Gen [(String, String)]
@@ -96,17 +100,24 @@ genNameVersions pNames = do
   pVersions <- Gen.list (Range.constant 3 20) genDependencyVersion
   pure $ zip pNames pVersions
 
-genPackageName :: Gen String
+genPackageName :: MonadGen n => n String
 genPackageName = Gen.choice
   [concat <$> sequence [rString, Gen.constant "-", rString], rString]
   where rString = Gen.string (Range.constant 4 8) Gen.lower
 
-genDependencyVersion :: Gen String
+genAuditorEntries :: MonadGen n => n [Auditor]
+genAuditorEntries = do
+  dDeps <- Gen.list (Range.constant 0 30) genDirectParsedDependency
+  inDeps <- Gen.list (Range.constant 0 30) genIndirectParsedDependency
+  return . map parsedDepToAuditor $ dDeps ++ inDeps
+
+
+genDependencyVersion :: MonadGen n => n String
 genDependencyVersion = concat <$> sequence
   [rInt, Gen.constant ".", rInt, Gen.constant ".", rInt, Gen.constant ".", rInt]
   where rInt = Gen.string (Range.constant 1 2) Gen.digit
 
-genPackage :: Gen Package
+genPackage :: MonadGen n => n Package
 genPackage = do
   pId      <- Gen.int32 Range.constantBounded
   pName    <- genPackageName
@@ -118,7 +129,7 @@ genPackage = do
   pure $ Package pId (pack pName) (pack pVersion) pTime dDep sUsed aStat
 
 
-genRemovedPackage :: Gen Package
+genRemovedPackage :: MonadGen n => n Package
 genRemovedPackage = do
   pId      <- Gen.int32 Range.constantBounded
   pName    <- genPackageName
@@ -128,7 +139,7 @@ genRemovedPackage = do
   aStat    <- genAnalysisStatus
   pure $ Package pId (pack pName) (pack pVersion) pTime dDep False aStat
 
-genSimpleDepList :: Gen [(String, [String])]
+genSimpleDepList :: MonadGen n => n [(String, [String])]
 genSimpleDepList = do
   directDep   <- genPackageName
   indirectDep <- genPackageName
@@ -140,7 +151,7 @@ genSimpleDepList = do
     ]
 
 
-genUTCTime :: Gen UTCTime
+genUTCTime :: MonadGen n => n UTCTime
 genUTCTime = do
   diffTime <- Gen.integral (Range.linear 0 86401)
   day      <- Gen.integral (Range.linear 0 1000000)
@@ -154,9 +165,9 @@ populateAuditorTempDb = do
   let dDeps  = directDeps $ buildDepTree "MainRepository" xs
   let inDeps = indirectDeps $ buildDepTree "MainRepository" xs
   versions <- generalize $ genNameVersions (dDeps ++ inDeps)
-
+  repoName  <- liftIO $ parseRepoName "currentDepTree.dot"
   -- Populate auditor table with initial deps.
   cTime    <- liftIO getCurrentTime
-  let packages = newParsedDeps versions dDeps inDeps cTime
+  let packages = newParsedDeps repoName versions dDeps inDeps cTime
   liftIO . runEitherT $ insertAuditorDeps "temp.db" packages
   return packages

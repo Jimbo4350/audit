@@ -6,6 +6,7 @@ module Audit.Conversion
   , auditorEntryToNotUsed
   , compareParsedWithAuditor
   , newParsedDeps
+  , parsedDepToAuditor
   , parsedDepToAudQExpr
   , returnUpdatedAuditorEntry
   , updatedAuditorValues
@@ -83,6 +84,18 @@ newParsedDeps rName pVersions dDeps indirDeps currTime = do
     ParsedDependency (pack rName) (pack x) (lookupVersion x) time True True []
   indirectPkg time x =
     ParsedDependency (pack rName) (pack x) (lookupVersion x) time False True []
+
+-- | Used for testing purposes.
+parsedDepToAuditor :: ParsedDependency -> Auditor
+parsedDepToAuditor (ParsedDependency repoName depName depVersion firstSeen isDirect inUse aStatus)
+  = Auditor 0
+            repoName
+            depName
+            depVersion
+            firstSeen
+            isDirect
+            inUse
+            (pack $ show aStatus)
 
 parsedDepToAudQExpr :: ParsedDependency -> AuditorT (QExpr Sqlite s)
 parsedDepToAudQExpr (ParsedDependency pRepoName pName pVersion dateFS dDep sUsed aStatus)

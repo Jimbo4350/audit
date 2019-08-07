@@ -74,7 +74,7 @@ data OperationError =
  deriving Show
 
 data OperationResult =
-    AuditorDepsInserted
+    AuditorDepsInserted [Auditor]
     -- ^ Dependencies successfully inserted into the Auditor table
   | AuditHashDoesNotMatch RepoName
     -- ^ The dependency tree has been updated and therefore the hash
@@ -105,7 +105,7 @@ data OperationResult =
   | SuccessfullyParsedRepos [ParsedRepo]
   | SuccessfullyUpdatedVersion
     -- ^ Updated the version of a particular dependency.
-  | UpdatedAuditorTableEntry
+  | UpdatedAuditorTableEntry Auditor
     -- ^ Updated the 'stillUsed' flag for specific enteries in the
     -- auditor table
   | VersionExistsInDb [Auditor]
